@@ -1,0 +1,40 @@
+/* Mona Sans Variable Font */
+@font-face {
+  font-family: 'Mona Sans';
+  src: url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.0/fonts/variable/Mona-Sans.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  font-style: normal;
+  font-variation-settings: 'wght' 400, 'wdth' 100;
+}
+
+@font-face {
+  font-family: 'Mona Sans';
+  src: url('https://cdn.jsdelivr.net/npm/@github/mona-sans@1.0.0/fonts/variable/Mona-Sans-Italic.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  font-style: italic;
+  font-variation-settings: 'wght' 400, 'wdth' 100;
+}
+
+/* Mona Sans Utility Classes for Different Variations */
+.font-mona-extralight { font-variation-settings: 'wght' 200, 'wdth' 100; }
+.font-mona-light { font-variation-settings: 'wght' 300, 'wdth' 100; }
+.font-mona-regular { font-variation-settings: 'wght' 400, 'wdth' 100; }
+.font-mona-medium { font-variation-settings: 'wght' 500, 'wdth' 100; }
+.font-mona-semibold { font-variation-settings: 'wght' 600, 'wdth' 100; }
+.font-mona-bold { font-variation-settings: 'wght' 700, 'wdth' 100; }
+.font-mona-extrabold { font-variation-settings: 'wght' 800, 'wdth' 100; }
+.font-mona-black { font-variation-settings: 'wght' 900, 'wdth' 100; }
+
+/* Width variations */
+.font-mona-narrow { font-variation-settings: 'wght' 400, 'wdth' 75; }
+.font-mona-wide { font-variation-settings: 'wght' 400, 'wdth' 125; }
+
+/* Combined variations for specific use cases */
+.font-mona-heading { font-variation-settings: 'wght' 700, 'wdth' 105; } /* Bold + slightly wide for headings */
+.font-mona-subheading { font-variation-settings: 'wght' 600, 'wdth' 102; } /* Semibold + slightly wide */
+.font-mona-caption { font-variation-settings: 'wght' 500, 'wdth' 95; } /* Medium + slightly narrow */
+.font-mona-display { font-variation-settings: 'wght' 800, 'wdth' 110; } /* Extrabold + wide for display text */
