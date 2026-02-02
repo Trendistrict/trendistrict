@@ -2,10 +2,15 @@
 
 import * as React from "react"
 import {
+  IconBuildingSkyscraper,
   IconHelp,
   IconInnerShadowTop,
-  IconListDetails,
+  IconLayoutDashboard,
+  IconMail,
+  IconNetwork,
   IconSettings,
+  IconUsers,
+  IconUserSearch,
 } from "@tabler/icons-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -24,15 +29,40 @@ import {
 const data = {
   navMain: [
     {
-      title: "Tasks",
-      url: "/tasks",
-      icon: IconListDetails,
+      title: "Dashboard",
+      url: "/sourcing",
+      icon: IconLayoutDashboard,
+    },
+    {
+      title: "Startups",
+      url: "/sourcing/startups",
+      icon: IconBuildingSkyscraper,
+    },
+    {
+      title: "Founders",
+      url: "/sourcing/founders",
+      icon: IconUserSearch,
+    },
+    {
+      title: "Outreach",
+      url: "/sourcing/outreach",
+      icon: IconMail,
+    },
+    {
+      title: "VC Network",
+      url: "/sourcing/vcs",
+      icon: IconNetwork,
+    },
+    {
+      title: "Introductions",
+      url: "/sourcing/introductions",
+      icon: IconUsers,
     },
   ],
   navSecondary: [
     {
       title: "Settings",
-      url: "#",
+      url: "/sourcing/settings",
       icon: IconSettings,
     },
     {
@@ -53,9 +83,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               asChild
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
-              <a href="/tasks">
+              <a href="/sourcing">
                 <IconInnerShadowTop className="!size-5" />
-                <span className="text-base font-semibold">VIBED</span>
+                <span className="text-base font-semibold">Trendistrict</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

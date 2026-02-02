@@ -23,7 +23,7 @@ function RedirectToDashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    router.push('/tasks');
+    router.push('/sourcing');
   }, [router]);
 
   return (
