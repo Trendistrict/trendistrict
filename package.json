@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "npm-run-all --parallel dev:frontend dev:backend",
-    "dev:frontend": "NODE_OPTIONS='--max-http-header-size=32768' next dev --turbopack",
+    "dev:frontend": "next dev --turbopack",
     "dev:backend": "convex dev --once",
     "build": "next build",
     "start": "next start",
