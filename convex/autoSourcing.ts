@@ -692,7 +692,7 @@ export const enrichDiscoveredStartups = action({
           startupId: startup._id,
           isStealthFromLinkedIn: startupStealthFromLinkedIn,
           isRecentlyAnnounced: startupRecentlyAnnounced,
-          companyInfo,
+          companyInfo: companyInfo ?? undefined,
         });
 
         if (companyInfo) {
