@@ -243,6 +243,9 @@ export default defineSchema({
     // LinkedIn settings (for manual tracking)
     linkedInProfileUrl: v.optional(v.string()),
 
+    // Exa.ai API key for LinkedIn enrichment
+    exaApiKey: v.optional(v.string()),
+
     // Preferences
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),

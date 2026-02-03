@@ -28,6 +28,7 @@ export const upsert = mutation({
     emailFromAddress: v.optional(v.string()),
     emailFromName: v.optional(v.string()),
     linkedInProfileUrl: v.optional(v.string()),
+    exaApiKey: v.optional(v.string()),
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),
   },

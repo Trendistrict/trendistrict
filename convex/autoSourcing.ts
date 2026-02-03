@@ -236,11 +236,11 @@ function formatAddress(address: Record<string, unknown> | null | undefined): str
   return parts.join(", ");
 }
 
-// LinkedIn enrichment action (requires external API like Proxycurl or Apollo)
+// LinkedIn enrichment action using Exa.ai
 export const enrichWithLinkedIn = action({
   args: {
     founderId: v.id("founders"),
-    linkedInApiKey: v.string(), // Proxycurl or Apollo API key
+    exaApiKey: v.string(), // Exa.ai API key
     linkedInUrl: v.optional(v.string()),
     searchByName: v.optional(v.boolean()),
   },
@@ -262,12 +262,12 @@ export const enrichWithLinkedIn = action({
     let profileData: LinkedInProfile | null = null;
 
     if (args.linkedInUrl) {
-      // Enrich from known LinkedIn URL using Proxycurl
-      profileData = await fetchLinkedInProfile(args.linkedInApiKey, args.linkedInUrl);
+      // Enrich from known LinkedIn URL using Exa.ai
+      profileData = await fetchLinkedInProfileWithExa(args.exaApiKey, args.linkedInUrl);
     } else if (args.searchByName) {
-      // Search for LinkedIn profile by name
-      profileData = await searchLinkedInProfile(
-        args.linkedInApiKey,
+      // Search for LinkedIn profile by name using Exa.ai
+      profileData = await searchLinkedInProfileWithExa(
+        args.exaApiKey,
         founder.firstName,
         founder.lastName
       );
@@ -308,90 +308,170 @@ interface LinkedInProfile {
   }>;
 }
 
-// Fetch LinkedIn profile using Proxycurl API
-async function fetchLinkedInProfile(
+// Fetch LinkedIn profile content using Exa.ai
+async function fetchLinkedInProfileWithExa(
   apiKey: string,
   linkedInUrl: string
 ): Promise<LinkedInProfile | null> {
   try {
-    const response = await fetch(
-      `https://nubela.co/proxycurl/api/v2/linkedin?url=${encodeURIComponent(linkedInUrl)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      }
-    );
+    // Use Exa.ai to get contents from the LinkedIn URL
+    const response = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        urls: [linkedInUrl],
+        text: true,
+      }),
+    });
 
     if (!response.ok) {
-      console.error("Proxycurl error:", response.status);
+      console.error("Exa.ai error:", response.status);
       return null;
     }
 
     const data = await response.json();
 
-    return {
-      linkedInUrl,
-      headline: data.headline,
-      location: data.city ? `${data.city}, ${data.country_full_name}` : data.country_full_name,
-      profileImageUrl: data.profile_pic_url,
-      education: (data.education ?? []).map((edu: Record<string, unknown>) => ({
-        school: edu.school as string,
-        degree: edu.degree_name as string,
-        fieldOfStudy: edu.field_of_study as string,
-        startYear: edu.starts_at ? (edu.starts_at as { year: number }).year : undefined,
-        endYear: edu.ends_at ? (edu.ends_at as { year: number }).year : undefined,
-      })),
-      experience: (data.experiences ?? []).map((exp: Record<string, unknown>) => ({
-        company: exp.company as string,
-        title: exp.title as string,
-        startDate: exp.starts_at
-          ? `${(exp.starts_at as { year: number }).year}-${(exp.starts_at as { month: number }).month}`
-          : undefined,
-        endDate: exp.ends_at
-          ? `${(exp.ends_at as { year: number }).year}-${(exp.ends_at as { month: number }).month}`
-          : undefined,
-        isCurrent: !exp.ends_at,
-      })),
-    };
+    if (!data.results || data.results.length === 0) {
+      return null;
+    }
+
+    const result = data.results[0];
+    const text = result.text || "";
+
+    // Parse the LinkedIn content to extract structured data
+    const profile = parseLinkedInContent(linkedInUrl, text);
+    return profile;
   } catch (error) {
-    console.error("Error fetching LinkedIn profile:", error);
+    console.error("Error fetching LinkedIn profile with Exa:", error);
     return null;
   }
 }
 
-// Search for LinkedIn profile by name
-async function searchLinkedInProfile(
+// Search for LinkedIn profile by name using Exa.ai
+async function searchLinkedInProfileWithExa(
   apiKey: string,
   firstName: string,
   lastName: string
 ): Promise<LinkedInProfile | null> {
   try {
-    // Using Proxycurl's Person Search API
-    const response = await fetch(
-      `https://nubela.co/proxycurl/api/search/person?first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&country=UK`,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
+    // Use Exa.ai to search for the person's LinkedIn profile
+    const searchQuery = `${firstName} ${lastName} site:linkedin.com/in`;
+
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        query: searchQuery,
+        numResults: 5,
+        includeDomains: ["linkedin.com"],
+        type: "neural",
+        useAutoprompt: true,
+        contents: {
+          text: true,
         },
-      }
-    );
+      }),
+    });
 
     if (!response.ok) {
+      console.error("Exa.ai search error:", response.status);
       return null;
     }
 
     const data = await response.json();
 
-    if (data.results && data.results.length > 0) {
-      // Get the first result's full profile
-      const linkedInUrl = data.results[0].linkedin_profile_url;
-      return fetchLinkedInProfile(apiKey, linkedInUrl);
+    if (!data.results || data.results.length === 0) {
+      return null;
     }
 
-    return null;
+    // Find the best match (first result from linkedin.com/in)
+    const linkedInResult = data.results.find((r: { url: string }) =>
+      r.url.includes("linkedin.com/in/")
+    );
+
+    if (!linkedInResult) {
+      return null;
+    }
+
+    const profile = parseLinkedInContent(linkedInResult.url, linkedInResult.text || "");
+    return profile;
   } catch (error) {
-    console.error("Error searching LinkedIn:", error);
+    console.error("Error searching LinkedIn with Exa:", error);
     return null;
   }
+}
+
+// Parse LinkedIn content text to extract structured data
+function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfile {
+  // Extract headline (usually first line or after the name)
+  const lines = text.split("\n").filter((l) => l.trim());
+  let headline = "";
+  let location = "";
+
+  // Try to find headline and location from the content
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
+    const line = lines[i].trim();
+    // Common patterns for headlines
+    if (line.includes("CEO") || line.includes("CTO") || line.includes("Founder") ||
+        line.includes("Director") || line.includes("Engineer") || line.includes("Developer")) {
+      if (!headline) headline = line;
+    }
+    // Location patterns
+    if (line.includes("London") || line.includes("UK") || line.includes("United Kingdom") ||
+        line.includes("Manchester") || line.includes("Cambridge") || line.includes("Oxford")) {
+      if (!location) location = line;
+    }
+  }
+
+  // Extract education entries
+  const education: LinkedInProfile["education"] = [];
+  const eduKeywords = ["University", "College", "Institute", "School", "MBA", "BSc", "MSc", "PhD", "Bachelor", "Master"];
+
+  for (const line of lines) {
+    for (const keyword of eduKeywords) {
+      if (line.includes(keyword)) {
+        // Try to extract school name
+        education.push({
+          school: line.substring(0, 100), // Limit length
+          degree: undefined,
+          fieldOfStudy: undefined,
+        });
+        break;
+      }
+    }
+  }
+
+  // Extract experience entries
+  const experience: LinkedInProfile["experience"] = [];
+  const companyPatterns = ["at ", "@ ", "worked at", "working at"];
+
+  for (const line of lines) {
+    for (const pattern of companyPatterns) {
+      const idx = line.toLowerCase().indexOf(pattern);
+      if (idx !== -1) {
+        const companyPart = line.substring(idx + pattern.length).trim();
+        if (companyPart.length > 2 && companyPart.length < 100) {
+          experience.push({
+            company: companyPart.split(/[,·\-]/)[0].trim(),
+            title: line.substring(0, idx).trim() || "Unknown",
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    linkedInUrl,
+    headline: headline || undefined,
+    location: location || undefined,
+    profileImageUrl: undefined, // Exa doesn't provide images
+    education: education.slice(0, 5), // Limit to 5 education entries
+    experience: experience.slice(0, 10), // Limit to 10 experience entries
+  };
 }

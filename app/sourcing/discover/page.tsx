@@ -291,12 +291,12 @@ export default function DiscoverPage() {
         <CardContent>
           <p className="text-sm text-muted-foreground mb-4">
             To automatically enrich founder profiles with LinkedIn data (education, work history),
-            you&apos;ll need a Proxycurl API key. This allows scoring founders based on top-tier
+            you&apos;ll need an Exa.ai API key. This allows scoring founders based on top-tier
             universities and high-growth company experience.
           </p>
           <Button variant="outline" asChild>
-            <a href="https://nubela.co/proxycurl" target="_blank" rel="noopener noreferrer">
-              Get Proxycurl API Key
+            <a href="https://exa.ai" target="_blank" rel="noopener noreferrer">
+              Get Exa.ai API Key
             </a>
           </Button>
         </CardContent>

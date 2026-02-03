@@ -28,6 +28,7 @@ import {
   IconCheck,
   IconLoader2,
   IconExternalLink,
+  IconSparkles,
 } from "@tabler/icons-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -45,6 +46,7 @@ export default function SettingsPage() {
 
   const [formData, setFormData] = useState({
     companiesHouseApiKey: "",
+    exaApiKey: "",
     emailApiKey: "",
     emailProvider: "resend",
     emailFromAddress: "",
@@ -61,6 +63,7 @@ export default function SettingsPage() {
     if (settings) {
       setFormData({
         companiesHouseApiKey: settings.companiesHouseApiKey ?? "",
+        exaApiKey: settings.exaApiKey ?? "",
         emailApiKey: settings.emailApiKey ?? "",
         emailProvider: settings.emailProvider ?? "resend",
         emailFromAddress: settings.emailFromAddress ?? "",
@@ -76,6 +79,7 @@ export default function SettingsPage() {
     try {
       await upsertSettings({
         companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+        exaApiKey: formData.exaApiKey || undefined,
         emailApiKey: formData.emailApiKey || undefined,
         emailProvider: formData.emailProvider || undefined,
         emailFromAddress: formData.emailFromAddress || undefined,
@@ -162,6 +166,50 @@ export default function SettingsPage() {
                 </p>
               </div>
               {formData.companiesHouseApiKey && (
+                <Badge variant="secondary" className="gap-1">
+                  <IconCheck className="h-3 w-3" />
+                  Configured
+                </Badge>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconSparkles className="h-5 w-5" />
+                Exa.ai API (LinkedIn Enrichment)
+              </CardTitle>
+              <CardDescription>
+                Used to find and enrich founder LinkedIn profiles
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="exaApiKey">API Key</Label>
+                <Input
+                  id="exaApiKey"
+                  type="password"
+                  value={formData.exaApiKey}
+                  onChange={(e) =>
+                    setFormData({ ...formData, exaApiKey: e.target.value })
+                  }
+                  placeholder="Enter your Exa.ai API key"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Get your API key from{" "}
+                  <a
+                    href="https://exa.ai"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Exa.ai Dashboard
+                    <IconExternalLink className="h-3 w-3 inline ml-1" />
+                  </a>
+                </p>
+              </div>
+              {formData.exaApiKey && (
                 <Badge variant="secondary" className="gap-1">
                   <IconCheck className="h-3 w-3" />
                   Configured
