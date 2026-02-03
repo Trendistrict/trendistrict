@@ -38,10 +38,17 @@ const SIC_CODE_CATEGORIES = [
 
 export default function DiscoverPage() {
   const [isRunning, setIsRunning] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
   const [results, setResults] = useState<{
     found: number;
     added: number;
     companies: Array<{ name: string; number: string; incorporated: string }>;
+  } | null>(null);
+  const [enrichResults, setEnrichResults] = useState<{
+    startupsProcessed: number;
+    foundersEnriched: number;
+    stealthDetected: number;
+    companiesEnriched: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +57,7 @@ export default function DiscoverPage() {
 
   const settings = useQuery(api.settings.get);
   const runAutoSourcing = useAction(api.autoSourcing.runAutoSourcing);
+  const enrichDiscoveredStartups = useAction(api.autoSourcing.enrichDiscoveredStartups);
 
   const handleRunSourcing = async () => {
     if (!settings?.companiesHouseApiKey) {
@@ -88,6 +96,30 @@ export default function DiscoverPage() {
         ? prev.filter((c) => c !== category)
         : [...prev, category]
     );
+  };
+
+  const handleEnrichStartups = async () => {
+    if (!settings?.exaApiKey) {
+      setError("Please configure your Exa.ai API key in Settings first.");
+      return;
+    }
+
+    setIsEnriching(true);
+    setError(null);
+    setEnrichResults(null);
+
+    try {
+      const result = await enrichDiscoveredStartups({
+        exaApiKey: settings.exaApiKey,
+        limit: 10,
+      });
+      setEnrichResults(result);
+    } catch (err) {
+      console.error("Enrichment error:", err);
+      setError(err instanceof Error ? err.message : "An error occurred during enrichment");
+    } finally {
+      setIsEnriching(false);
+    }
   };
 
   return (
@@ -277,7 +309,7 @@ export default function DiscoverPage() {
         </CardContent>
       </Card>
 
-      {/* LinkedIn Integration Info */}
+      {/* LinkedIn Enrichment */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -291,15 +323,29 @@ export default function DiscoverPage() {
             )}
           </CardTitle>
           <CardDescription>
-            Enhance founder profiles with LinkedIn data
+            Enrich founder profiles with LinkedIn data, detect stealth mode, and calculate founder scores
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           {settings?.exaApiKey ? (
-            <p className="text-sm text-muted-foreground">
-              Exa.ai is configured. Founder profiles will be automatically enriched with LinkedIn data
-              including education and work history for scoring.
-            </p>
+            <>
+              <p className="text-sm text-muted-foreground">
+                Enrichment will search LinkedIn for founder profiles, detect stealth signals,
+                score founders based on top universities (Oxford, Cambridge, Stanford, etc.)
+                and high-growth company experience (Google, Stripe, Revolut, etc.).
+              </p>
+              <Button
+                onClick={handleEnrichStartups}
+                disabled={isEnriching}
+              >
+                {isEnriching ? (
+                  <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <IconSparkles className="h-4 w-4 mr-2" />
+                )}
+                {isEnriching ? "Enriching Profiles..." : "Enrich Discovered Startups"}
+              </Button>
+            </>
           ) : (
             <>
               <p className="text-sm text-muted-foreground mb-4">
@@ -316,6 +362,41 @@ export default function DiscoverPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Enrichment Results */}
+      {enrichResults && (
+        <Card className="border-green-500/50 bg-green-500/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <IconCheck className="h-5 w-5 text-green-500" />
+              Enrichment Complete
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{enrichResults.startupsProcessed}</p>
+                <p className="text-sm text-muted-foreground">Startups Processed</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{enrichResults.foundersEnriched}</p>
+                <p className="text-sm text-muted-foreground">Founders Enriched</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold text-amber-500">{enrichResults.stealthDetected}</p>
+                <p className="text-sm text-muted-foreground">Stealth Detected</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{enrichResults.companiesEnriched}</p>
+                <p className="text-sm text-muted-foreground">Companies Info Found</p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground mt-4">
+              View enriched founders and their scores in the Founders section.
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

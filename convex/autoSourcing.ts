@@ -292,12 +292,16 @@ interface LinkedInProfile {
   headline?: string;
   location?: string;
   profileImageUrl?: string;
+  isStealthMode?: boolean; // Detected from profile
+  isRecentlyAnnounced?: boolean;
+  stealthSignals?: string[]; // What triggered stealth detection
   education: Array<{
     school: string;
     degree?: string;
     fieldOfStudy?: string;
     startYear?: number;
     endYear?: number;
+    isTopTier?: boolean;
   }>;
   experience: Array<{
     company: string;
@@ -305,8 +309,42 @@ interface LinkedInProfile {
     startDate?: string;
     endDate?: string;
     isCurrent?: boolean;
+    isHighGrowth?: boolean;
   }>;
 }
+
+// Top-tier universities for scoring
+const TOP_TIER_UNIVERSITIES = [
+  "oxford", "cambridge", "imperial", "ucl", "lse", "stanford", "mit", "harvard",
+  "yale", "princeton", "berkeley", "carnegie mellon", "eth zurich", "caltech",
+  "columbia", "chicago", "wharton", "insead", "london business school"
+];
+
+// High-growth companies for scoring
+const HIGH_GROWTH_COMPANIES = [
+  "google", "meta", "facebook", "amazon", "apple", "microsoft", "netflix",
+  "stripe", "revolut", "monzo", "wise", "transferwise", "checkout.com",
+  "deliveroo", "uber", "airbnb", "spotify", "klarna", "plaid", "figma",
+  "notion", "slack", "zoom", "shopify", "coinbase", "openai", "anthropic",
+  "deepmind", "palantir", "snowflake", "databricks", "datadog", "twilio",
+  "salesforce", "hubspot", "atlassian", "gitlab", "linkedin", "twitter",
+  "mckinsey", "bain", "bcg", "goldman sachs", "morgan stanley", "jp morgan"
+];
+
+// Stealth mode keywords to detect from LinkedIn
+const STEALTH_KEYWORDS = [
+  "stealth", "stealth mode", "stealth startup", "building something new",
+  "something new", "working on something", "new venture", "unannounced",
+  "pre-launch", "under the radar", "confidential", "secret project",
+  "founding team", "0 to 1", "zero to one", "building in stealth"
+];
+
+// Recently announced keywords
+const RECENTLY_ANNOUNCED_KEYWORDS = [
+  "just launched", "recently launched", "announcing", "excited to announce",
+  "thrilled to share", "proud to announce", "officially launching",
+  "coming out of stealth", "out of stealth", "publicly announced"
+];
 
 // Fetch LinkedIn profile content using Exa.ai
 async function fetchLinkedInProfileWithExa(
@@ -406,62 +444,115 @@ async function searchLinkedInProfileWithExa(
   }
 }
 
-// Parse LinkedIn content text to extract structured data
+// Parse LinkedIn content text to extract structured data with stealth detection and scoring
 function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfile {
-  // Extract headline (usually first line or after the name)
+  const textLower = text.toLowerCase();
   const lines = text.split("\n").filter((l) => l.trim());
+
+  // Detect stealth mode signals
+  const stealthSignals: string[] = [];
+  let isStealthMode = false;
+  let isRecentlyAnnounced = false;
+
+  for (const keyword of STEALTH_KEYWORDS) {
+    if (textLower.includes(keyword.toLowerCase())) {
+      stealthSignals.push(keyword);
+      isStealthMode = true;
+    }
+  }
+
+  for (const keyword of RECENTLY_ANNOUNCED_KEYWORDS) {
+    if (textLower.includes(keyword.toLowerCase())) {
+      isRecentlyAnnounced = true;
+    }
+  }
+
+  // Extract headline and location
   let headline = "";
   let location = "";
 
-  // Try to find headline and location from the content
   for (let i = 0; i < Math.min(10, lines.length); i++) {
     const line = lines[i].trim();
-    // Common patterns for headlines
     if (line.includes("CEO") || line.includes("CTO") || line.includes("Founder") ||
-        line.includes("Director") || line.includes("Engineer") || line.includes("Developer")) {
+        line.includes("Director") || line.includes("Engineer") || line.includes("Developer") ||
+        line.includes("Building") || line.includes("Co-founder")) {
       if (!headline) headline = line;
     }
-    // Location patterns
     if (line.includes("London") || line.includes("UK") || line.includes("United Kingdom") ||
-        line.includes("Manchester") || line.includes("Cambridge") || line.includes("Oxford")) {
+        line.includes("Manchester") || line.includes("Cambridge") || line.includes("Oxford") ||
+        line.includes("Edinburgh") || line.includes("Bristol") || line.includes("Birmingham")) {
       if (!location) location = line;
     }
   }
 
-  // Extract education entries
+  // Extract and score education
   const education: LinkedInProfile["education"] = [];
   const eduKeywords = ["University", "College", "Institute", "School", "MBA", "BSc", "MSc", "PhD", "Bachelor", "Master"];
 
   for (const line of lines) {
+    const lineLower = line.toLowerCase();
     for (const keyword of eduKeywords) {
       if (line.includes(keyword)) {
-        // Try to extract school name
+        const isTopTier = TOP_TIER_UNIVERSITIES.some(uni => lineLower.includes(uni));
         education.push({
-          school: line.substring(0, 100), // Limit length
+          school: line.substring(0, 100),
           degree: undefined,
           fieldOfStudy: undefined,
+          isTopTier,
         });
         break;
       }
     }
   }
 
-  // Extract experience entries
+  // Extract and score experience
   const experience: LinkedInProfile["experience"] = [];
-  const companyPatterns = ["at ", "@ ", "worked at", "working at"];
 
+  // Look for company mentions
   for (const line of lines) {
-    for (const pattern of companyPatterns) {
-      const idx = line.toLowerCase().indexOf(pattern);
-      if (idx !== -1) {
-        const companyPart = line.substring(idx + pattern.length).trim();
-        if (companyPart.length > 2 && companyPart.length < 100) {
-          experience.push({
-            company: companyPart.split(/[,·\-]/)[0].trim(),
-            title: line.substring(0, idx).trim() || "Unknown",
-          });
-          break;
+    const lineLower = line.toLowerCase();
+
+    // Check if this line mentions a high-growth company
+    for (const company of HIGH_GROWTH_COMPANIES) {
+      if (lineLower.includes(company)) {
+        // Try to extract title
+        let title = "Unknown";
+        const titlePatterns = ["engineer", "developer", "manager", "director", "vp", "head", "lead", "founder", "ceo", "cto", "cfo"];
+        for (const pattern of titlePatterns) {
+          if (lineLower.includes(pattern)) {
+            const idx = lineLower.indexOf(pattern);
+            title = line.substring(Math.max(0, idx - 20), idx + pattern.length + 10).trim();
+            break;
+          }
         }
+
+        experience.push({
+          company: company.charAt(0).toUpperCase() + company.slice(1),
+          title,
+          isHighGrowth: true,
+        });
+        break;
+      }
+    }
+
+    // Also look for general company patterns
+    const companyPatterns = ["at ", "@ "];
+    for (const pattern of companyPatterns) {
+      const idx = lineLower.indexOf(pattern);
+      if (idx !== -1 && idx < 50) {
+        const companyPart = line.substring(idx + pattern.length).trim().split(/[,·\-]/)[0].trim();
+        if (companyPart.length > 2 && companyPart.length < 50) {
+          const isHighGrowth = HIGH_GROWTH_COMPANIES.some(hg => companyPart.toLowerCase().includes(hg));
+          // Avoid duplicates
+          if (!experience.some(e => e.company.toLowerCase() === companyPart.toLowerCase())) {
+            experience.push({
+              company: companyPart,
+              title: line.substring(0, idx).trim() || "Unknown",
+              isHighGrowth,
+            });
+          }
+        }
+        break;
       }
     }
   }
@@ -470,8 +561,223 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
     linkedInUrl,
     headline: headline || undefined,
     location: location || undefined,
-    profileImageUrl: undefined, // Exa doesn't provide images
-    education: education.slice(0, 5), // Limit to 5 education entries
-    experience: experience.slice(0, 10), // Limit to 10 experience entries
+    profileImageUrl: undefined,
+    isStealthMode,
+    isRecentlyAnnounced,
+    stealthSignals: stealthSignals.length > 0 ? stealthSignals : undefined,
+    education: education.slice(0, 5),
+    experience: experience.slice(0, 10),
   };
+}
+
+// Calculate founder score based on education and experience
+function calculateFounderScore(profile: LinkedInProfile): {
+  educationScore: number;
+  experienceScore: number;
+  overallScore: number;
+} {
+  let educationScore = 0;
+  let experienceScore = 0;
+
+  // Education scoring (max 100)
+  const topTierCount = profile.education.filter(e => e.isTopTier).length;
+  if (topTierCount > 0) {
+    educationScore = Math.min(100, 50 + topTierCount * 25);
+  } else if (profile.education.length > 0) {
+    educationScore = 30; // Has some education
+  }
+
+  // Experience scoring (max 100)
+  const highGrowthCount = profile.experience.filter(e => e.isHighGrowth).length;
+  if (highGrowthCount >= 3) {
+    experienceScore = 100;
+  } else if (highGrowthCount === 2) {
+    experienceScore = 80;
+  } else if (highGrowthCount === 1) {
+    experienceScore = 60;
+  } else if (profile.experience.length > 0) {
+    experienceScore = 30;
+  }
+
+  // Bonus for founder/leadership roles
+  const hasLeadershipRole = profile.experience.some(e =>
+    e.title.toLowerCase().includes("founder") ||
+    e.title.toLowerCase().includes("ceo") ||
+    e.title.toLowerCase().includes("cto") ||
+    e.title.toLowerCase().includes("head") ||
+    e.title.toLowerCase().includes("director")
+  );
+  if (hasLeadershipRole) {
+    experienceScore = Math.min(100, experienceScore + 15);
+  }
+
+  // Overall score (weighted average)
+  const overallScore = Math.round(educationScore * 0.4 + experienceScore * 0.6);
+
+  return { educationScore, experienceScore, overallScore };
+}
+
+// Comprehensive enrichment action - enriches all founders for discovered startups
+export const enrichDiscoveredStartups = action({
+  args: {
+    exaApiKey: v.string(),
+    limit: v.optional(v.number()), // How many startups to enrich
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    // Get startups that need enrichment
+    const startups = await ctx.runQuery(internal.autoSourcingHelpers.getStartupsNeedingEnrichment, {
+      userId: identity.subject,
+      limit: args.limit ?? 10,
+    });
+
+    const results = {
+      startupsProcessed: 0,
+      foundersEnriched: 0,
+      stealthDetected: 0,
+      companiesEnriched: 0,
+    };
+
+    for (const startup of startups) {
+      try {
+        // Get founders for this startup
+        const founders = await ctx.runQuery(internal.autoSourcingHelpers.getFoundersForStartup, {
+          startupId: startup._id,
+        });
+
+        let startupStealthFromLinkedIn = false;
+        let startupRecentlyAnnounced = false;
+
+        for (const founder of founders) {
+          // Search for LinkedIn profile
+          const profile = await searchLinkedInProfileWithExa(
+            args.exaApiKey,
+            founder.firstName,
+            founder.lastName
+          );
+
+          if (profile) {
+            // Calculate scores
+            const scores = calculateFounderScore(profile);
+
+            // Update founder with enriched data
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+              founderId: founder._id,
+              linkedInData: profile,
+              scores,
+            });
+
+            results.foundersEnriched++;
+
+            // Track stealth signals from any founder
+            if (profile.isStealthMode) {
+              startupStealthFromLinkedIn = true;
+              results.stealthDetected++;
+            }
+            if (profile.isRecentlyAnnounced) {
+              startupRecentlyAnnounced = true;
+            }
+          }
+        }
+
+        // Search for company information via Exa
+        const companyInfo = await searchCompanyInfo(args.exaApiKey, startup.companyName);
+
+        // Update startup with enriched data
+        await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnriched, {
+          startupId: startup._id,
+          isStealthFromLinkedIn: startupStealthFromLinkedIn,
+          isRecentlyAnnounced: startupRecentlyAnnounced,
+          companyInfo,
+        });
+
+        if (companyInfo) {
+          results.companiesEnriched++;
+        }
+
+        results.startupsProcessed++;
+      } catch (error) {
+        console.error(`Error enriching startup ${startup._id}:`, error);
+      }
+    }
+
+    return results;
+  },
+});
+
+// Search for company information using Exa.ai
+async function searchCompanyInfo(apiKey: string, companyName: string): Promise<{
+  description?: string;
+  website?: string;
+  funding?: string;
+  news?: string[];
+} | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        query: `${companyName} UK startup company`,
+        numResults: 5,
+        type: "neural",
+        useAutoprompt: true,
+        contents: {
+          text: true,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (!data.results || data.results.length === 0) {
+      return null;
+    }
+
+    // Extract useful information from results
+    let description = "";
+    let website = "";
+    const news: string[] = [];
+
+    for (const result of data.results) {
+      const url = result.url || "";
+      const text = result.text || "";
+
+      // Look for company website
+      if (!website && !url.includes("linkedin") && !url.includes("twitter") &&
+          !url.includes("crunchbase") && !url.includes("news")) {
+        website = url;
+      }
+
+      // Extract description from first substantial text
+      if (!description && text.length > 50) {
+        description = text.substring(0, 300);
+      }
+
+      // Collect news mentions
+      if (url.includes("techcrunch") || url.includes("sifted") || url.includes("news") ||
+          url.includes("bloomberg") || url.includes("reuters")) {
+        news.push(result.title || url);
+      }
+    }
+
+    return {
+      description: description || undefined,
+      website: website || undefined,
+      news: news.length > 0 ? news.slice(0, 3) : undefined,
+    };
+  } catch (error) {
+    console.error("Error searching company info:", error);
+    return null;
+  }
 }

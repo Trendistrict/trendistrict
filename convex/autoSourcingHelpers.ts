@@ -137,3 +137,139 @@ export const updateFounderWithLinkedIn = internalMutation({
     });
   },
 });
+
+// Get startups that need LinkedIn enrichment
+export const getStartupsNeedingEnrichment = internalQuery({
+  args: {
+    userId: v.string(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // Get recently discovered startups that haven't been enriched
+    const startups = await ctx.db
+      .query("startups")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.eq(q.field("stage"), "discovered"))
+      .order("desc")
+      .take(args.limit);
+
+    return startups;
+  },
+});
+
+// Get founders for a startup
+export const getFoundersForStartup = internalQuery({
+  args: {
+    startupId: v.id("startups"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("founders")
+      .filter((q) => q.eq(q.field("startupId"), args.startupId))
+      .collect();
+  },
+});
+
+// Update founder with enriched LinkedIn data and scores
+export const updateFounderEnriched = internalMutation({
+  args: {
+    founderId: v.id("founders"),
+    linkedInData: v.object({
+      linkedInUrl: v.string(),
+      headline: v.optional(v.string()),
+      location: v.optional(v.string()),
+      profileImageUrl: v.optional(v.string()),
+      isStealthMode: v.optional(v.boolean()),
+      isRecentlyAnnounced: v.optional(v.boolean()),
+      stealthSignals: v.optional(v.array(v.string())),
+      education: v.array(
+        v.object({
+          school: v.string(),
+          degree: v.optional(v.string()),
+          fieldOfStudy: v.optional(v.string()),
+          startYear: v.optional(v.number()),
+          endYear: v.optional(v.number()),
+          isTopTier: v.optional(v.boolean()),
+        })
+      ),
+      experience: v.array(
+        v.object({
+          company: v.string(),
+          title: v.string(),
+          startDate: v.optional(v.string()),
+          endDate: v.optional(v.string()),
+          isCurrent: v.optional(v.boolean()),
+          isHighGrowth: v.optional(v.boolean()),
+        })
+      ),
+    }),
+    scores: v.object({
+      educationScore: v.number(),
+      experienceScore: v.number(),
+      overallScore: v.number(),
+    }),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.founderId, {
+      linkedInUrl: args.linkedInData.linkedInUrl,
+      headline: args.linkedInData.headline,
+      location: args.linkedInData.location,
+      profileImageUrl: args.linkedInData.profileImageUrl,
+      education: args.linkedInData.education,
+      experience: args.linkedInData.experience,
+      educationScore: args.scores.educationScore,
+      experienceScore: args.scores.experienceScore,
+      overallScore: args.scores.overallScore,
+    });
+  },
+});
+
+// Update startup with enriched data
+export const updateStartupEnriched = internalMutation({
+  args: {
+    startupId: v.id("startups"),
+    isStealthFromLinkedIn: v.boolean(),
+    isRecentlyAnnounced: v.boolean(),
+    companyInfo: v.optional(
+      v.object({
+        description: v.optional(v.string()),
+        website: v.optional(v.string()),
+        funding: v.optional(v.string()),
+        news: v.optional(v.array(v.string())),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const startup = await ctx.db.get(args.startupId);
+    if (!startup) return;
+
+    // Calculate team score based on founders
+    const founders = await ctx.db
+      .query("founders")
+      .filter((q) => q.eq(q.field("startupId"), args.startupId))
+      .collect();
+
+    const founderScores = founders
+      .map((f) => f.overallScore)
+      .filter((s): s is number => s !== undefined);
+
+    const teamScore =
+      founderScores.length > 0
+        ? Math.round(founderScores.reduce((a, b) => a + b, 0) / founderScores.length)
+        : undefined;
+
+    await ctx.db.patch(args.startupId, {
+      // Update stealth status if detected from LinkedIn
+      isStealthMode: startup.isStealthMode || args.isStealthFromLinkedIn,
+      recentlyAnnounced: startup.recentlyAnnounced || args.isRecentlyAnnounced,
+      // Update notes with company info
+      notes: args.companyInfo?.description
+        ? `${startup.notes || ""}\n\n${args.companyInfo.description}`.trim()
+        : startup.notes,
+      // Update scores
+      teamScore,
+      // Move to researching stage since we've enriched it
+      stage: "researching",
+    });
+  },
+});
