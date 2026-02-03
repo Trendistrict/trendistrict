@@ -283,22 +283,37 @@ export default function DiscoverPage() {
           <CardTitle className="flex items-center gap-2">
             <IconBrandLinkedin className="h-5 w-5" />
             LinkedIn Enrichment
+            {settings?.exaApiKey && (
+              <Badge variant="secondary" className="ml-2">
+                <IconCheck className="h-3 w-3 mr-1" />
+                Configured
+              </Badge>
+            )}
           </CardTitle>
           <CardDescription>
             Enhance founder profiles with LinkedIn data
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground mb-4">
-            To automatically enrich founder profiles with LinkedIn data (education, work history),
-            you&apos;ll need an Exa.ai API key. This allows scoring founders based on top-tier
-            universities and high-growth company experience.
-          </p>
-          <Button variant="outline" asChild>
-            <a href="https://exa.ai" target="_blank" rel="noopener noreferrer">
-              Get Exa.ai API Key
-            </a>
-          </Button>
+          {settings?.exaApiKey ? (
+            <p className="text-sm text-muted-foreground">
+              Exa.ai is configured. Founder profiles will be automatically enriched with LinkedIn data
+              including education and work history for scoring.
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground mb-4">
+                To automatically enrich founder profiles with LinkedIn data (education, work history),
+                you&apos;ll need an Exa.ai API key. This allows scoring founders based on top-tier
+                universities and high-growth company experience.
+              </p>
+              <Button variant="outline" asChild>
+                <a href="https://exa.ai" target="_blank" rel="noopener noreferrer">
+                  Get Exa.ai API Key
+                </a>
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>
