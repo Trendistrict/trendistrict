@@ -8,6 +8,7 @@ import {
   IconLayoutDashboard,
   IconMail,
   IconNetwork,
+  IconRocket,
   IconSettings,
   IconUsers,
   IconUserSearch,
@@ -32,6 +33,11 @@ const data = {
       title: "Dashboard",
       url: "/sourcing",
       icon: IconLayoutDashboard,
+    },
+    {
+      title: "Auto-Discover",
+      url: "/sourcing/discover",
+      icon: IconRocket,
     },
     {
       title: "Startups",
