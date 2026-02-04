@@ -4,29 +4,154 @@ import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
-// Tech/AI SIC codes for filtering innovative startups
-const TECH_AI_SIC_CODES = [
-  "62011", // Computer programming activities
-  "62012", // Business and domestic software development
-  "62020", // Information technology consultancy activities
-  "62030", // Computer facilities management activities
-  "62090", // Other information technology service activities
-  "63110", // Data processing, hosting and related activities
-  "63120", // Web portals
-  "72110", // Research and experimental development on biotechnology
-  "72190", // Other R&D on natural sciences and engineering
-  "72200", // R&D on social sciences and humanities
-];
+// Comprehensive SIC code categories for different startup verticals
+const SIC_CODE_CATEGORIES = {
+  // Software & SaaS
+  "SaaS & Software": {
+    codes: ["62011", "62012", "62020", "62030", "62090"],
+    description: "Software development, SaaS, cloud applications",
+    scalabilityScore: 90,
+  },
+  // AI & Machine Learning
+  "AI & Machine Learning": {
+    codes: ["62011", "62012", "72190", "72200"],
+    description: "Artificial intelligence, ML, data science",
+    scalabilityScore: 95,
+  },
+  // Data & Cloud Infrastructure
+  "Data & Cloud": {
+    codes: ["63110", "63120", "63910", "63990"],
+    description: "Data processing, hosting, cloud infrastructure",
+    scalabilityScore: 85,
+  },
+  // Fintech
+  "Fintech": {
+    codes: ["64209", "64303", "64921", "64999", "66110", "66190", "66300"],
+    description: "Financial technology, payments, banking",
+    scalabilityScore: 90,
+  },
+  // E-commerce & Marketplaces
+  "E-commerce & Marketplaces": {
+    codes: ["47910", "47990", "63120"],
+    description: "Online retail, marketplaces, D2C brands",
+    scalabilityScore: 75,
+  },
+  // HealthTech & BioTech
+  "HealthTech & BioTech": {
+    codes: ["72110", "72190", "86210", "86220", "86230"],
+    description: "Healthcare technology, biotech, medical devices",
+    scalabilityScore: 80,
+  },
+  // Consumer Tech
+  "Consumer Tech": {
+    codes: ["62011", "62012", "63120", "59111", "59120"],
+    description: "Consumer apps, entertainment, media tech",
+    scalabilityScore: 70,
+  },
+  // FitnessTech & Wellness
+  "FitnessTech & Wellness": {
+    codes: ["93130", "93110", "96040", "86900"],
+    description: "Fitness apps, wellness platforms, health tracking",
+    scalabilityScore: 70,
+  },
+  // FashionTech & Retail Tech
+  "FashionTech & Retail": {
+    codes: ["14110", "14120", "14130", "46420", "47710"],
+    description: "Fashion technology, retail innovation, D2C fashion",
+    scalabilityScore: 65,
+  },
+  // FoodTech & AgriTech
+  "FoodTech & AgriTech": {
+    codes: ["10110", "10200", "10310", "01110", "01500"],
+    description: "Food delivery, agritech, food innovation",
+    scalabilityScore: 70,
+  },
+  // PropTech & Real Estate
+  "PropTech": {
+    codes: ["68100", "68201", "68202", "68209", "68310"],
+    description: "Property technology, real estate platforms",
+    scalabilityScore: 75,
+  },
+  // EdTech
+  "EdTech": {
+    codes: ["85421", "85422", "85590", "85600"],
+    description: "Education technology, online learning",
+    scalabilityScore: 80,
+  },
+  // CleanTech & Sustainability
+  "CleanTech & Sustainability": {
+    codes: ["35110", "35120", "38110", "38320", "39000"],
+    description: "Clean energy, sustainability, environmental tech",
+    scalabilityScore: 85,
+  },
+  // Logistics & Supply Chain
+  "Logistics & Supply Chain": {
+    codes: ["49410", "52100", "52210", "52290"],
+    description: "Logistics tech, supply chain, delivery",
+    scalabilityScore: 75,
+  },
+  // HR Tech & Future of Work
+  "HR Tech & Future of Work": {
+    codes: ["78100", "78200", "78300", "82990"],
+    description: "HR technology, recruitment, workforce management",
+    scalabilityScore: 80,
+  },
+  // Cybersecurity
+  "Cybersecurity": {
+    codes: ["62020", "62090", "63110"],
+    description: "Security software, data protection",
+    scalabilityScore: 90,
+  },
+  // Gaming & Entertainment
+  "Gaming & Entertainment": {
+    codes: ["58210", "59111", "59120", "62011"],
+    description: "Gaming, entertainment tech, streaming",
+    scalabilityScore: 75,
+  },
+  // InsurTech
+  "InsurTech": {
+    codes: ["65110", "65120", "65201", "65202"],
+    description: "Insurance technology, insurtech platforms",
+    scalabilityScore: 85,
+  },
+  // LegalTech
+  "LegalTech": {
+    codes: ["69101", "69102", "69109"],
+    description: "Legal technology, contract automation",
+    scalabilityScore: 80,
+  },
+};
 
-// Fintech SIC codes
-const FINTECH_SIC_CODES = [
-  "64209", // Activities of other holding companies
-  "64303", // Activities of venture and development capital companies
-  "64921", // Credit granting by non-deposit taking finance houses
-  "64999", // Financial intermediation not elsewhere classified
-  "66190", // Activities auxiliary to financial intermediation
-  "66300", // Fund management activities
-];
+// Business model indicators
+const BUSINESS_MODEL_INDICATORS = {
+  B2B: {
+    keywords: ["enterprise", "business", "b2b", "saas", "platform", "api", "infrastructure", "workflow", "automation"],
+    sicPatterns: ["62", "63", "70", "78"], // Software, data, consulting, HR
+  },
+  B2C: {
+    keywords: ["consumer", "app", "users", "subscription", "marketplace", "retail", "shopping"],
+    sicPatterns: ["47", "56", "59", "93"], // Retail, food service, entertainment, sports
+  },
+  DTC: {
+    keywords: ["direct", "brand", "d2c", "dtc", "ecommerce", "shop", "store"],
+    sicPatterns: ["14", "10", "47"], // Fashion, food, retail
+  },
+  Marketplace: {
+    keywords: ["marketplace", "platform", "connect", "matching", "network"],
+    sicPatterns: ["63", "47"],
+  },
+};
+
+// Scalability signals to look for
+const SCALABILITY_SIGNALS = {
+  positive: [
+    "technology", "platform", "software", "digital", "online", "app", "ai", "automation",
+    "saas", "cloud", "api", "data", "machine learning", "marketplace", "subscription"
+  ],
+  negative: [
+    "consulting", "agency", "services", "local", "traditional", "manual", "brick and mortar"
+  ],
+};
 
 // Companies House API base URL
 const COMPANIES_HOUSE_API = "https://api.company-information.service.gov.uk";

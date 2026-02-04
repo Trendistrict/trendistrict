@@ -30,10 +30,55 @@ import {
 } from "@tabler/icons-react";
 
 const SIC_CODE_CATEGORIES = [
-  { label: "AI & Software", codes: ["62011", "62012", "62020", "62090"] },
-  { label: "Data & Cloud", codes: ["63110", "63120"] },
-  { label: "Biotech & R&D", codes: ["72110", "72190", "72200"] },
-  { label: "Fintech", codes: ["64209", "64303", "64999", "66190", "66300"] },
+  // Tech & Software
+  { label: "SaaS & Software", codes: ["62011", "62012", "62020", "62030", "62090"], group: "Tech" },
+  { label: "AI & Machine Learning", codes: ["62011", "62012", "72190", "72200"], group: "Tech" },
+  { label: "Data & Cloud", codes: ["63110", "63120", "63910", "63990"], group: "Tech" },
+  { label: "Cybersecurity", codes: ["62020", "62090", "63110"], group: "Tech" },
+
+  // Finance & Insurance
+  { label: "Fintech", codes: ["64209", "64303", "64921", "64999", "66110", "66190", "66300"], group: "Finance" },
+  { label: "InsurTech", codes: ["65110", "65120", "65201", "65202"], group: "Finance" },
+
+  // Health & Science
+  { label: "HealthTech & BioTech", codes: ["72110", "72190", "86210", "86220", "86230"], group: "Health" },
+  { label: "FitnessTech & Wellness", codes: ["93130", "93110", "96040", "86900"], group: "Health" },
+
+  // Consumer & Retail
+  { label: "E-commerce & Marketplaces", codes: ["47910", "47990", "63120"], group: "Consumer" },
+  { label: "Consumer Tech", codes: ["62011", "62012", "63120", "59111", "59120"], group: "Consumer" },
+  { label: "FashionTech & Retail", codes: ["14110", "14120", "14130", "46420", "47710"], group: "Consumer" },
+  { label: "FoodTech & AgriTech", codes: ["10110", "10200", "10310", "01110", "01500"], group: "Consumer" },
+
+  // Enterprise & Services
+  { label: "PropTech", codes: ["68100", "68201", "68202", "68209", "68310"], group: "Enterprise" },
+  { label: "EdTech", codes: ["85421", "85422", "85590", "85600"], group: "Enterprise" },
+  { label: "HR Tech", codes: ["78100", "78200", "78300", "82990"], group: "Enterprise" },
+  { label: "LegalTech", codes: ["69101", "69102", "69109"], group: "Enterprise" },
+  { label: "Logistics & Supply Chain", codes: ["49410", "52100", "52210", "52290"], group: "Enterprise" },
+
+  // Sustainability & Energy
+  { label: "CleanTech & Sustainability", codes: ["35110", "35120", "38110", "38320", "39000"], group: "Sustainability" },
+
+  // Entertainment
+  { label: "Gaming & Entertainment", codes: ["58210", "59111", "59120", "62011"], group: "Entertainment" },
+];
+
+const BUSINESS_MODELS = [
+  { label: "B2B", description: "Business-to-Business" },
+  { label: "B2C", description: "Business-to-Consumer" },
+  { label: "DTC", description: "Direct-to-Consumer" },
+  { label: "Marketplace", description: "Two-sided platform" },
+];
+
+const CATEGORY_GROUPS = [
+  { name: "Tech", color: "bg-blue-500/10 border-blue-500/30" },
+  { name: "Finance", color: "bg-green-500/10 border-green-500/30" },
+  { name: "Health", color: "bg-pink-500/10 border-pink-500/30" },
+  { name: "Consumer", color: "bg-orange-500/10 border-orange-500/30" },
+  { name: "Enterprise", color: "bg-purple-500/10 border-purple-500/30" },
+  { name: "Sustainability", color: "bg-emerald-500/10 border-emerald-500/30" },
+  { name: "Entertainment", color: "bg-yellow-500/10 border-yellow-500/30" },
 ];
 
 export default function DiscoverPage() {
@@ -53,7 +98,8 @@ export default function DiscoverPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [daysBack, setDaysBack] = useState("30");
-  const [selectedCategories, setSelectedCategories] = useState<string[]>(["AI & Software", "Fintech"]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(["SaaS & Software", "AI & Machine Learning", "Fintech"]);
+  const [selectedBusinessModels, setSelectedBusinessModels] = useState<string[]>([]);
 
   const settings = useQuery(api.settings.get);
   const runAutoSourcing = useAction(api.autoSourcing.runAutoSourcing);
@@ -161,28 +207,84 @@ export default function DiscoverPage() {
             </Select>
           </div>
 
-          {/* Industry Categories */}
-          <div className="space-y-3">
-            <Label>Industry Sectors</Label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {SIC_CODE_CATEGORIES.map((category) => (
-                <div
-                  key={category.label}
-                  className={`flex items-center gap-2 p-3 border rounded-lg cursor-pointer transition-colors ${
-                    selectedCategories.includes(category.label)
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                  onClick={() => toggleCategory(category.label)}
+          {/* Industry Categories - Grouped */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label>Industry Verticals</Label>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedCategories(SIC_CODE_CATEGORIES.map(c => c.label))}
                 >
-                  <Checkbox
-                    checked={selectedCategories.includes(category.label)}
-                    onCheckedChange={() => toggleCategory(category.label)}
-                  />
-                  <span className="text-sm font-medium">{category.label}</span>
+                  Select All
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedCategories([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
+            {CATEGORY_GROUPS.map((group) => {
+              const groupCategories = SIC_CODE_CATEGORIES.filter(c => c.group === group.name);
+              if (groupCategories.length === 0) return null;
+
+              return (
+                <div key={group.name} className="space-y-2">
+                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">{group.name}</Label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {groupCategories.map((category) => (
+                      <div
+                        key={category.label}
+                        className={`flex items-center gap-2 p-2 border rounded-lg cursor-pointer transition-colors text-sm ${
+                          selectedCategories.includes(category.label)
+                            ? `border-primary bg-primary/10`
+                            : `${group.color} hover:border-primary/50`
+                        }`}
+                        onClick={() => toggleCategory(category.label)}
+                      >
+                        <Checkbox
+                          checked={selectedCategories.includes(category.label)}
+                          onCheckedChange={() => toggleCategory(category.label)}
+                        />
+                        <span className="font-medium truncate">{category.label}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+
+          {/* Business Model Filter */}
+          <div className="space-y-3">
+            <Label>Business Model (Optional)</Label>
+            <div className="flex flex-wrap gap-2">
+              {BUSINESS_MODELS.map((model) => (
+                <Badge
+                  key={model.label}
+                  variant={selectedBusinessModels.includes(model.label) ? "default" : "outline"}
+                  className="cursor-pointer px-3 py-1"
+                  onClick={() => {
+                    setSelectedBusinessModels(prev =>
+                      prev.includes(model.label)
+                        ? prev.filter(m => m !== model.label)
+                        : [...prev, model.label]
+                    );
+                  }}
+                >
+                  {model.label}
+                  <span className="ml-1 text-xs opacity-70">({model.description})</span>
+                </Badge>
               ))}
             </div>
+            <p className="text-xs text-muted-foreground">
+              Business model is inferred from company data and LinkedIn enrichment
+            </p>
           </div>
 
           {/* Run Button */}
