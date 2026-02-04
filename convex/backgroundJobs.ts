@@ -1,0 +1,836 @@
+"use node";
+
+import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { v } from "convex/values";
+import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { sleep, withRetry } from "./lib/rateLimiter";
+
+// Daily limit for startups to discover (split across cron runs)
+const DAILY_DISCOVERY_LIMIT = 20;
+const DISCOVERY_BATCH_SIZE = 5; // 20/4 runs per day = 5 per run
+
+// ============ SCHEDULED DISCOVERY ============
+
+export const runScheduledDiscovery = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all users with settings configured
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobs.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      if (!settings.companiesHouseApiKey) continue;
+
+      // Check if discovery is already running for this user
+      const isRunning = await ctx.runQuery(internal.jobHelpers.checkJobRunning, {
+        userId: settings.userId,
+        jobType: "discovery",
+      });
+
+      if (isRunning) {
+        console.log(`Discovery already running for user ${settings.userId}, skipping`);
+        continue;
+      }
+
+      // Check rate limit
+      const rateCheck = await ctx.runQuery(internal.jobHelpers.checkRateLimit, {
+        userId: settings.userId,
+        apiName: "companies_house",
+      });
+
+      if (!rateCheck.allowed) {
+        console.log(`Rate limited for user ${settings.userId}, retrying later`);
+        continue;
+      }
+
+      try {
+        // Start job
+        const jobId = await ctx.runMutation(internal.jobHelpers.startJobRun, {
+          userId: settings.userId,
+          jobType: "discovery",
+          itemsTotal: DISCOVERY_BATCH_SIZE,
+        });
+
+        // Run discovery with limited batch
+        const result = await runDiscoveryBatch(
+          ctx,
+          settings.userId,
+          settings.companiesHouseApiKey,
+          DISCOVERY_BATCH_SIZE,
+          jobId
+        );
+
+        // Complete job
+        await ctx.runMutation(internal.jobHelpers.completeJobMutation, {
+          jobId,
+          results: result,
+        });
+
+        console.log(`Discovery completed for user ${settings.userId}: found ${result.added} startups`);
+      } catch (error) {
+        console.error(`Discovery failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
+async function runDiscoveryBatch(
+  ctx: Parameters<typeof runScheduledDiscovery.handler>[0],
+  userId: string,
+  apiKey: string,
+  limit: number,
+  jobId: Id<"jobRuns">
+): Promise<{ found: number; added: number }> {
+  const COMPANIES_HOUSE_API = "https://api.company-information.service.gov.uk";
+
+  // Get SIC codes for tech startups
+  const techSicCodes = [
+    "62011", "62012", "62020", "62030", "62090", // Software
+    "63110", "63120", "63990", // Data/web
+    "72190", "72200", // R&D
+    "64999", "66190", // Fintech
+  ];
+
+  // Search last 90 days for startups
+  const toDate = new Date();
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - 90);
+
+  const fromDateStr = fromDate.toISOString().split("T")[0];
+  const toDateStr = toDate.toISOString().split("T")[0];
+
+  const allCompanies: Array<{
+    companyNumber: string;
+    companyName: string;
+    companyStatus: string;
+    companyType: string;
+    incorporationDate: string;
+    sicCodes?: string[];
+  }> = [];
+
+  // Search each SIC code with rate limiting
+  for (const sicCode of techSicCodes) {
+    try {
+      // Record API request
+      await ctx.runMutation(internal.jobHelpers.recordApiRequest, {
+        userId,
+        apiName: "companies_house",
+      });
+
+      const url = `${COMPANIES_HOUSE_API}/advanced-search/companies?incorporated_from=${fromDateStr}&incorporated_to=${toDateStr}&sic_codes=${sicCode}&size=50&status=active`;
+
+      const response = await withRetry(
+        () =>
+          fetch(url, {
+            headers: {
+              Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+            },
+          }),
+        { maxAttempts: 3 }
+      );
+
+      if (!response.ok) {
+        if (response.status === 416) continue; // No results
+        if (response.status === 429) {
+          console.log("Rate limited by Companies House, stopping batch");
+          break;
+        }
+        continue;
+      }
+
+      const data = await response.json();
+      const items = data.items ?? [];
+
+      for (const item of items) {
+        allCompanies.push({
+          companyNumber: item.company_number,
+          companyName: item.company_name,
+          companyStatus: item.company_status,
+          companyType: item.company_type,
+          incorporationDate: item.date_of_creation,
+          sicCodes: item.sic_codes,
+        });
+      }
+
+      // Small delay between requests
+      await sleep(200);
+    } catch (error) {
+      console.error(`Error searching SIC ${sicCode}:`, error);
+    }
+  }
+
+  // Deduplicate
+  const uniqueCompanies = Array.from(
+    new Map(allCompanies.map((c) => [c.companyNumber, c])).values()
+  );
+
+  // Filter for startups
+  const filtered = uniqueCompanies.filter(
+    (c) =>
+      c.companyStatus === "active" &&
+      (c.companyType?.includes("ltd") || c.companyType?.includes("private-limited"))
+  );
+
+  // Get existing company numbers to avoid duplicates
+  const existingNumbers = await ctx.runQuery(
+    internal.backgroundJobs.getExistingCompanyNumbers,
+    { userId }
+  );
+  const existingSet = new Set(existingNumbers);
+
+  // Filter out already discovered companies
+  const newCompanies = filtered.filter((c) => !existingSet.has(c.companyNumber));
+
+  // Add up to limit
+  let added = 0;
+  for (const company of newCompanies.slice(0, limit)) {
+    try {
+      // Get officers with rate limiting
+      await ctx.runMutation(internal.jobHelpers.recordApiRequest, {
+        userId,
+        apiName: "companies_house",
+      });
+
+      const officersUrl = `${COMPANIES_HOUSE_API}/company/${company.companyNumber}/officers`;
+      const officersResponse = await fetch(officersUrl, {
+        headers: {
+          Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+        },
+      });
+
+      let officers: Array<{ name: string; role: string }> = [];
+      if (officersResponse.ok) {
+        const officersData = await officersResponse.json();
+        officers = (officersData.items ?? [])
+          .filter((o: Record<string, unknown>) => !o.resigned_on)
+          .map((o: Record<string, unknown>) => ({
+            name: o.name as string,
+            role: o.officer_role as string,
+          }));
+      }
+
+      // Save to database
+      await ctx.runMutation(internal.autoSourcingHelpers.saveDiscoveredStartup, {
+        userId,
+        company: {
+          companyNumber: company.companyNumber,
+          companyName: company.companyName,
+          incorporationDate: company.incorporationDate,
+          companyStatus: company.companyStatus,
+          companyType: company.companyType,
+          sicCodes: company.sicCodes,
+        },
+        officers,
+      });
+
+      added++;
+
+      // Update progress
+      await ctx.runMutation(internal.jobHelpers.updateJobProgressMutation, {
+        jobId,
+        itemsProcessed: added,
+      });
+
+      await sleep(300);
+    } catch (error) {
+      console.error(`Error adding company ${company.companyNumber}:`, error);
+    }
+  }
+
+  return { found: newCompanies.length, added };
+}
+
+// ============ SCHEDULED ENRICHMENT ============
+
+export const runScheduledEnrichment = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobs.getUsersWithEnrichmentEnabled);
+
+    for (const settings of usersWithSettings) {
+      if (!settings.exaApiKey) continue;
+
+      // Check if enrichment is already running
+      const isRunning = await ctx.runQuery(internal.jobHelpers.checkJobRunning, {
+        userId: settings.userId,
+        jobType: "enrichment",
+      });
+
+      if (isRunning) {
+        console.log(`Enrichment already running for user ${settings.userId}, skipping`);
+        continue;
+      }
+
+      // Check rate limit
+      const rateCheck = await ctx.runQuery(internal.jobHelpers.checkRateLimit, {
+        userId: settings.userId,
+        apiName: "exa",
+      });
+
+      if (!rateCheck.allowed) {
+        console.log(`Exa rate limited for user ${settings.userId}, retrying later`);
+        continue;
+      }
+
+      try {
+        const jobId = await ctx.runMutation(internal.jobHelpers.startJobRun, {
+          userId: settings.userId,
+          jobType: "enrichment",
+        });
+
+        const result = await runEnrichmentBatch(ctx, settings.userId, settings.exaApiKey, 5, jobId);
+
+        await ctx.runMutation(internal.jobHelpers.completeJobMutation, {
+          jobId,
+          results: result,
+        });
+
+        console.log(`Enrichment completed for user ${settings.userId}: enriched ${result.foundersEnriched} founders`);
+      } catch (error) {
+        console.error(`Enrichment failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
+async function runEnrichmentBatch(
+  ctx: Parameters<typeof runScheduledEnrichment.handler>[0],
+  userId: string,
+  exaApiKey: string,
+  limit: number,
+  jobId: Id<"jobRuns">
+): Promise<{ startupsProcessed: number; foundersEnriched: number }> {
+  // Get startups needing enrichment
+  const startups = await ctx.runQuery(internal.autoSourcingHelpers.getStartupsNeedingEnrichment, {
+    userId,
+    limit,
+  });
+
+  let startupsProcessed = 0;
+  let foundersEnriched = 0;
+
+  for (const startup of startups) {
+    const founders = await ctx.runQuery(internal.autoSourcingHelpers.getFoundersForStartup, {
+      startupId: startup._id,
+    });
+
+    for (const founder of founders) {
+      // Skip if already enriched
+      if (founder.linkedInUrl && founder.overallScore) continue;
+
+      try {
+        // Record API request
+        await ctx.runMutation(internal.jobHelpers.recordApiRequest, {
+          userId,
+          apiName: "exa",
+        });
+
+        // Search LinkedIn via Exa
+        const searchQuery = `${founder.firstName} ${founder.lastName} site:linkedin.com/in`;
+        const response = await fetch("https://api.exa.ai/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": exaApiKey,
+          },
+          body: JSON.stringify({
+            query: searchQuery,
+            numResults: 3,
+            includeDomains: ["linkedin.com"],
+            type: "neural",
+            contents: { text: true },
+          }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            console.log("Exa rate limited, stopping batch");
+            break;
+          }
+          continue;
+        }
+
+        const data = await response.json();
+        const linkedInResult = data.results?.find((r: { url: string }) =>
+          r.url.includes("linkedin.com/in/")
+        );
+
+        if (linkedInResult) {
+          // Parse profile and calculate scores
+          const profileData = parseLinkedInContent(linkedInResult.url, linkedInResult.text || "");
+          const scores = calculateFounderScore(profileData);
+
+          await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+            founderId: founder._id,
+            linkedInData: profileData,
+            scores,
+          });
+
+          foundersEnriched++;
+        }
+
+        await sleep(1000); // Rate limit Exa requests
+      } catch (error) {
+        console.error(`Error enriching founder ${founder._id}:`, error);
+      }
+    }
+
+    // Move startup to researching stage after enrichment
+    await ctx.runMutation(internal.backgroundJobs.updateStartupStage, {
+      startupId: startup._id,
+      stage: "researching",
+    });
+
+    startupsProcessed++;
+
+    await ctx.runMutation(internal.jobHelpers.updateJobProgressMutation, {
+      jobId,
+      itemsProcessed: startupsProcessed,
+    });
+  }
+
+  return { startupsProcessed, foundersEnriched };
+}
+
+// ============ OUTREACH QUEUE PROCESSING ============
+
+export const processOutreachQueue = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all pending outreach items that are due
+    const pendingItems = await ctx.runQuery(internal.backgroundJobs.getPendingOutreach);
+
+    for (const item of pendingItems) {
+      // Only send one email per user per run to avoid spam
+      const isRunning = await ctx.runQuery(internal.jobHelpers.checkJobRunning, {
+        userId: item.userId,
+        jobType: "outreach",
+      });
+
+      if (isRunning) continue;
+
+      // Get user's email settings
+      const settings = await ctx.runQuery(internal.backgroundJobs.getUserSettings, {
+        userId: item.userId,
+      });
+
+      if (!settings?.emailApiKey || item.type !== "email") {
+        console.log(`Skipping outreach ${item._id}: no email configured or not email type`);
+        continue;
+      }
+
+      try {
+        // Mark as sending
+        await ctx.runMutation(internal.backgroundJobs.updateOutreachQueueStatus, {
+          queueId: item._id,
+          status: "sending",
+        });
+
+        // Get founder's email
+        const founder = await ctx.runQuery(internal.backgroundJobs.getFounderById, {
+          founderId: item.founderId,
+        });
+
+        if (!founder?.email) {
+          await ctx.runMutation(internal.backgroundJobs.updateOutreachQueueStatus, {
+            queueId: item._id,
+            status: "failed",
+            error: "Founder has no email address",
+          });
+          continue;
+        }
+
+        // Send email via Resend
+        const emailResult = await sendEmailViaResend(
+          settings.emailApiKey,
+          {
+            from: settings.emailFromAddress || "outreach@trendistrict.com",
+            fromName: settings.emailFromName || "Robbie",
+            to: founder.email,
+            subject: item.subject || "Introduction",
+            body: item.message,
+          }
+        );
+
+        if (emailResult.success) {
+          // Mark as sent
+          await ctx.runMutation(internal.backgroundJobs.markOutreachSent, {
+            queueId: item._id,
+            founderId: item.founderId,
+            startupId: item.startupId,
+            subject: item.subject,
+            message: item.message,
+          });
+
+          console.log(`Email sent to ${founder.email}`);
+        } else {
+          // Handle failure with retry logic
+          const attempts = item.attempts + 1;
+          if (attempts >= item.maxAttempts) {
+            await ctx.runMutation(internal.backgroundJobs.updateOutreachQueueStatus, {
+              queueId: item._id,
+              status: "failed",
+              error: emailResult.error,
+            });
+          } else {
+            // Schedule retry with exponential backoff
+            const retryDelay = Math.pow(2, attempts) * 60 * 1000; // 2, 4, 8 minutes
+            await ctx.runMutation(internal.backgroundJobs.retryOutreach, {
+              queueId: item._id,
+              error: emailResult.error || "Unknown error",
+              nextAttemptAt: Date.now() + retryDelay,
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`Outreach failed for ${item._id}:`, error);
+        await ctx.runMutation(internal.backgroundJobs.updateOutreachQueueStatus, {
+          queueId: item._id,
+          status: "failed",
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+  },
+});
+
+async function sendEmailViaResend(
+  apiKey: string,
+  email: {
+    from: string;
+    fromName: string;
+    to: string;
+    subject: string;
+    body: string;
+  }
+): Promise<{ success: boolean; error?: string; id?: string }> {
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `${email.fromName} <${email.from}>`,
+        to: [email.to],
+        subject: email.subject,
+        text: email.body,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return {
+        success: false,
+        error: errorData.message || `Resend error: ${response.status}`,
+      };
+    }
+
+    const data = await response.json();
+    return { success: true, id: data.id };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Network error",
+    };
+  }
+}
+
+// ============ CLEANUP ============
+
+export const cleanupOldRecords = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Cleanup old job records for all users
+    const allJobs = await ctx.runQuery(internal.backgroundJobs.getAllOldJobs);
+
+    for (const job of allJobs) {
+      await ctx.runMutation(internal.backgroundJobs.deleteJob, { jobId: job._id });
+    }
+
+    console.log(`Cleaned up ${allJobs.length} old job records`);
+  },
+});
+
+// ============ HELPER QUERIES/MUTATIONS ============
+
+export const getUsersWithDiscoveryEnabled = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("userSettings").collect();
+  },
+});
+
+export const getUsersWithEnrichmentEnabled = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const settings = await ctx.db.query("userSettings").collect();
+    return settings.filter((s) => s.exaApiKey);
+  },
+});
+
+export const getExistingCompanyNumbers = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    const startups = await ctx.db
+      .query("startups")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+    return startups.map((s) => s.companyNumber);
+  },
+});
+
+export const getUserSettings = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("userSettings")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .first();
+  },
+});
+
+export const getPendingOutreach = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    return await ctx.db
+      .query("outreachQueue")
+      .withIndex("by_status", (q) => q.eq("status", "queued"))
+      .filter((q) => q.lte(q.field("scheduledFor"), now))
+      .take(10);
+  },
+});
+
+export const getFounderById = internalQuery({
+  args: { founderId: v.id("founders") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.founderId);
+  },
+});
+
+export const updateStartupStage = internalMutation({
+  args: {
+    startupId: v.id("startups"),
+    stage: v.union(
+      v.literal("discovered"),
+      v.literal("researching"),
+      v.literal("qualified"),
+      v.literal("contacted"),
+      v.literal("meeting"),
+      v.literal("introduced"),
+      v.literal("passed")
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.startupId, { stage: args.stage });
+  },
+});
+
+export const updateOutreachQueueStatus = internalMutation({
+  args: {
+    queueId: v.id("outreachQueue"),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("sending"),
+      v.literal("sent"),
+      v.literal("failed")
+    ),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.queueId, {
+      status: args.status,
+      lastError: args.error,
+      lastAttemptAt: Date.now(),
+    });
+  },
+});
+
+export const markOutreachSent = internalMutation({
+  args: {
+    queueId: v.id("outreachQueue"),
+    founderId: v.id("founders"),
+    startupId: v.optional(v.id("startups")),
+    subject: v.optional(v.string()),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const queue = await ctx.db.get(args.queueId);
+    if (!queue) return;
+
+    // Mark queue item as sent
+    await ctx.db.patch(args.queueId, {
+      status: "sent",
+      sentAt: Date.now(),
+    });
+
+    // Create outreach record
+    await ctx.db.insert("outreach", {
+      userId: queue.userId,
+      founderId: args.founderId,
+      startupId: args.startupId,
+      type: "email",
+      status: "sent",
+      subject: args.subject,
+      message: args.message,
+      createdAt: queue.createdAt,
+      sentAt: Date.now(),
+    });
+  },
+});
+
+export const retryOutreach = internalMutation({
+  args: {
+    queueId: v.id("outreachQueue"),
+    error: v.string(),
+    nextAttemptAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const queue = await ctx.db.get(args.queueId);
+    if (!queue) return;
+
+    await ctx.db.patch(args.queueId, {
+      status: "queued",
+      attempts: queue.attempts + 1,
+      lastAttemptAt: Date.now(),
+      lastError: args.error,
+      scheduledFor: args.nextAttemptAt,
+    });
+  },
+});
+
+export const getAllOldJobs = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return await ctx.db
+      .query("jobRuns")
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("status"), "running"),
+          q.lt(q.field("completedAt"), oneWeekAgo)
+        )
+      )
+      .take(100);
+  },
+});
+
+export const deleteJob = internalMutation({
+  args: { jobId: v.id("jobRuns") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.jobId);
+  },
+});
+
+// ============ LINKEDIN PARSING (copied from autoSourcing for use here) ============
+
+const TOP_TIER_UNIVERSITIES = [
+  "oxford", "cambridge", "imperial", "ucl", "lse", "stanford", "mit", "harvard",
+  "yale", "princeton", "berkeley", "carnegie mellon", "eth zurich", "caltech",
+];
+
+const HIGH_GROWTH_COMPANIES = [
+  "google", "meta", "facebook", "amazon", "apple", "microsoft", "netflix",
+  "stripe", "revolut", "monzo", "wise", "deliveroo", "uber", "airbnb",
+  "spotify", "klarna", "openai", "anthropic", "deepmind", "figma", "notion",
+];
+
+interface LinkedInProfile {
+  linkedInUrl: string;
+  headline?: string;
+  location?: string;
+  isStealthMode?: boolean;
+  isRecentlyAnnounced?: boolean;
+  education: Array<{ school: string; isTopTier?: boolean }>;
+  experience: Array<{ company: string; title: string; isHighGrowth?: boolean }>;
+}
+
+function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfile {
+  const textLower = text.toLowerCase();
+  const lines = text.split("\n").filter((l) => l.trim());
+
+  const stealthKeywords = ["stealth", "building something new", "unannounced", "0 to 1"];
+  const announcedKeywords = ["just launched", "announcing", "out of stealth"];
+
+  const isStealthMode = stealthKeywords.some((k) => textLower.includes(k));
+  const isRecentlyAnnounced = announcedKeywords.some((k) => textLower.includes(k));
+
+  let headline = "";
+  let location = "";
+
+  for (const line of lines.slice(0, 10)) {
+    if (/CEO|CTO|Founder|Director|Engineer|Building/i.test(line) && !headline) {
+      headline = line.substring(0, 100);
+    }
+    if (/London|UK|Manchester|Cambridge|Oxford/i.test(line) && !location) {
+      location = line.substring(0, 50);
+    }
+  }
+
+  const education: LinkedInProfile["education"] = [];
+  const eduKeywords = ["University", "College", "Institute", "MBA", "PhD"];
+
+  for (const line of lines) {
+    for (const keyword of eduKeywords) {
+      if (line.includes(keyword)) {
+        const isTopTier = TOP_TIER_UNIVERSITIES.some((u) => line.toLowerCase().includes(u));
+        education.push({ school: line.substring(0, 100), isTopTier });
+        break;
+      }
+    }
+  }
+
+  const experience: LinkedInProfile["experience"] = [];
+
+  for (const line of lines) {
+    const lineLower = line.toLowerCase();
+    for (const company of HIGH_GROWTH_COMPANIES) {
+      if (lineLower.includes(company)) {
+        experience.push({
+          company: company.charAt(0).toUpperCase() + company.slice(1),
+          title: "Unknown",
+          isHighGrowth: true,
+        });
+        break;
+      }
+    }
+  }
+
+  return {
+    linkedInUrl,
+    headline: headline || undefined,
+    location: location || undefined,
+    isStealthMode,
+    isRecentlyAnnounced,
+    education: education.slice(0, 5),
+    experience: experience.slice(0, 10),
+  };
+}
+
+function calculateFounderScore(profile: LinkedInProfile): {
+  educationScore: number;
+  experienceScore: number;
+  overallScore: number;
+} {
+  let educationScore = 0;
+  let experienceScore = 0;
+
+  const topTierCount = profile.education.filter((e) => e.isTopTier).length;
+  if (topTierCount > 0) {
+    educationScore = Math.min(100, 50 + topTierCount * 25);
+  } else if (profile.education.length > 0) {
+    educationScore = 30;
+  }
+
+  const highGrowthCount = profile.experience.filter((e) => e.isHighGrowth).length;
+  if (highGrowthCount >= 3) experienceScore = 100;
+  else if (highGrowthCount === 2) experienceScore = 80;
+  else if (highGrowthCount === 1) experienceScore = 60;
+  else if (profile.experience.length > 0) experienceScore = 30;
+
+  const overallScore = Math.round(educationScore * 0.4 + experienceScore * 0.6);
+
+  return { educationScore, experienceScore, overallScore };
+}

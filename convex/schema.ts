@@ -280,4 +280,77 @@ export default defineSchema({
       searchField: "universityName",
       filterFields: ["userId"],
     }),
+
+  // Job tracking for background tasks
+  jobRuns: defineTable({
+    userId: v.string(),
+    jobType: v.union(
+      v.literal("discovery"),
+      v.literal("enrichment"),
+      v.literal("outreach")
+    ),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed")
+    ),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+
+    // Progress tracking
+    itemsProcessed: v.number(),
+    itemsTotal: v.optional(v.number()),
+    itemsFailed: v.number(),
+
+    // Results summary
+    results: v.optional(v.any()),
+    error: v.optional(v.string()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_type", ["userId", "jobType"])
+    .index("by_status", ["status"]),
+
+  // Rate limit tracking
+  rateLimits: defineTable({
+    userId: v.string(),
+    apiName: v.string(), // "companies_house", "exa", "resend"
+    windowStart: v.number(), // Start of the rate limit window
+    requestCount: v.number(),
+    lastRequestAt: v.number(),
+  })
+    .index("by_user_and_api", ["userId", "apiName"]),
+
+  // Outreach queue for automated sending
+  outreachQueue: defineTable({
+    userId: v.string(),
+    founderId: v.id("founders"),
+    startupId: v.optional(v.id("startups")),
+
+    // Outreach details
+    type: v.union(v.literal("email"), v.literal("linkedin")),
+    subject: v.optional(v.string()),
+    message: v.string(),
+
+    // Queue status
+    status: v.union(
+      v.literal("queued"),
+      v.literal("sending"),
+      v.literal("sent"),
+      v.literal("failed")
+    ),
+    priority: v.number(), // Lower = higher priority
+    scheduledFor: v.number(), // When to send
+
+    // Retry tracking
+    attempts: v.number(),
+    maxAttempts: v.number(),
+    lastAttemptAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+
+    createdAt: v.number(),
+    sentAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_status", ["status"])
+    .index("by_scheduled", ["status", "scheduledFor"]),
 });
