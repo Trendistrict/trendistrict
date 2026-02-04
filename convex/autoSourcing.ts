@@ -192,7 +192,9 @@ export const runAutoSourcing = action({
     }
 
     const daysBack = args.daysBack ?? 30;
-    const sicCodes = args.sicCodeFilter ?? [...TECH_AI_SIC_CODES, ...FINTECH_SIC_CODES];
+    // Get all SIC codes from all categories if none specified
+    const allSicCodes = Object.values(SIC_CODE_CATEGORIES).flatMap(cat => cat.codes);
+    const sicCodes = args.sicCodeFilter ?? allSicCodes;
 
     // Calculate date range
     const toDate = new Date();
