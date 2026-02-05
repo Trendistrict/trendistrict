@@ -271,6 +271,105 @@ export const removeTopUniversity = mutation({
   },
 });
 
+// Seed default email templates
+export const seedDefaultTemplates = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    const userId = identity.subject;
+
+    // Check if templates already exist
+    const existingTemplates = await ctx.db
+      .query("templates")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+
+    if (existingTemplates) {
+      return { message: "Templates already exist" };
+    }
+
+    const now = Date.now();
+
+    // Create founder introduction template
+    await ctx.db.insert("templates", {
+      userId,
+      name: "Founder Introduction",
+      type: "email",
+      subject: "Quick intro - {{companyName}}",
+      body: `Hi {{firstName}},
+
+I came across {{companyName}} and was impressed by what you're building. I work with early-stage VCs and help connect promising founders with investors who are a good fit.
+
+I'd love to learn more about your journey and see if I can be helpful - whether that's introductions to relevant investors, feedback on your pitch, or just sharing what I'm seeing in the market.
+
+Would you be open to a quick 15-minute chat this week?
+
+Best,
+Robbie`,
+      variables: ["firstName", "lastName", "companyName"],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Create stealth founder template
+    await ctx.db.insert("templates", {
+      userId,
+      name: "Stealth Founder Outreach",
+      type: "email",
+      subject: "Connecting with stealth founders",
+      body: `Hi {{firstName}},
+
+I noticed you're working on something new and wanted to reach out. I spend my time connecting exceptional founders with early-stage VCs, particularly at pre-seed and seed.
+
+I know stealth means you're likely heads down building, but when you're ready to start conversations with investors, I'd be happy to make some warm introductions to funds that would be a good fit.
+
+No pressure at all - just wanted to plant the seed. Feel free to reach out whenever the timing is right.
+
+Best,
+Robbie`,
+      variables: ["firstName", "lastName"],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Create follow-up template
+    await ctx.db.insert("templates", {
+      userId,
+      name: "Follow-up",
+      type: "email",
+      subject: "Re: {{companyName}} - following up",
+      body: `Hi {{firstName}},
+
+Just wanted to follow up on my previous note about {{companyName}}. I know founders are incredibly busy, so I'll keep this brief.
+
+If you're open to a quick chat about fundraising or investor introductions, I'm happy to help. If the timing isn't right, no worries at all.
+
+Best,
+Robbie`,
+      variables: ["firstName", "companyName"],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Create LinkedIn template
+    await ctx.db.insert("templates", {
+      userId,
+      name: "LinkedIn Connection",
+      type: "linkedin",
+      body: `Hi {{firstName}}, I came across {{companyName}} and was impressed. I connect founders with early-stage VCs - would love to chat if you're exploring funding options.`,
+      variables: ["firstName", "companyName"],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { message: "Default templates created", count: 4 };
+  },
+});
+
 // Seed default high-growth companies and universities
 export const seedDefaults = mutation({
   args: {},
