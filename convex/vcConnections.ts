@@ -298,28 +298,75 @@ export const getMatchingVCsForStartup = query({
 function inferSectorsFromSIC(sicCodes: string[]): string[] {
   const sectors: string[] = [];
 
+  // Two-digit prefix mappings
   const sicToSector: Record<string, string> = {
+    // Technology
     "62": "software",
     "63": "data",
+    "72": "ai",
+    // Finance
     "64": "fintech",
     "65": "insurtech",
     "66": "fintech",
-    "72": "ai",
+    // Industry verticals
     "86": "healthtech",
     "85": "edtech",
     "68": "proptech",
     "35": "cleantech",
     "38": "cleantech",
+    // Commerce & logistics
     "47": "ecommerce",
     "49": "logistics",
     "52": "logistics",
+    // Fashion & retail
+    "14": "fashion",
+    "13": "fashion",
+    "46": "fashion", // Wholesale apparel
+    "74": "fashion", // Design activities (includes fashion design)
+  };
+
+  // More specific 4-digit SIC codes for fashion tech
+  const specificSicCodes: Record<string, string> = {
+    "1413": "fashion", // Manufacture of other outerwear
+    "1414": "fashion", // Manufacture of underwear
+    "1419": "fashion", // Manufacture of other wearing apparel
+    "1420": "fashion", // Manufacture of articles of fur
+    "4642": "fashion", // Wholesale of clothing and footwear
+    "4771": "fashion", // Retail of clothing
+    "4772": "fashion", // Retail of footwear and leather goods
+    "7410": "fashion", // Specialised design activities
+    "9601": "fashion", // Washing and dry-cleaning
+    "9602": "fashion", // Hairdressing and beauty treatment
+    "6201": "software", // Computer programming
+    "6202": "software", // Computer consultancy
+    "6203": "software", // Computer facilities management
+    "6209": "software", // Other IT service activities
+    "6311": "data", // Data processing
+    "6312": "data", // Web portals
+    "7021": "ai", // PR and communication
+    "7022": "ai", // Business and management consultancy
   };
 
   for (const sic of sicCodes) {
+    // Check specific 4-digit codes first
+    const fourDigit = sic.substring(0, 4);
+    if (specificSicCodes[fourDigit] && !sectors.includes(specificSicCodes[fourDigit])) {
+      sectors.push(specificSicCodes[fourDigit]);
+      continue;
+    }
+
+    // Fall back to 2-digit prefix
     const prefix = sic.substring(0, 2);
     if (sicToSector[prefix] && !sectors.includes(sicToSector[prefix])) {
       sectors.push(sicToSector[prefix]);
     }
+  }
+
+  // If we have both fashion and software/ecommerce, mark as fashion-tech
+  const hasFashion = sectors.includes("fashion");
+  const hasTech = sectors.includes("software") || sectors.includes("ecommerce") || sectors.includes("data");
+  if (hasFashion && hasTech) {
+    sectors.push("fashion-tech");
   }
 
   return sectors;

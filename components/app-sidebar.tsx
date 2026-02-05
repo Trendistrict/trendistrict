@@ -7,9 +7,11 @@ import {
   IconInnerShadowTop,
   IconLayoutDashboard,
   IconMail,
+  IconMailFast,
   IconNetwork,
   IconRocket,
   IconSettings,
+  IconSparkles,
   IconUsers,
   IconUserSearch,
 } from "@tabler/icons-react"
@@ -55,9 +57,19 @@ const data = {
       icon: IconMail,
     },
     {
+      title: "Email Queue",
+      url: "/sourcing/queue",
+      icon: IconMailFast,
+    },
+    {
       title: "VC Network",
       url: "/sourcing/vcs",
       icon: IconNetwork,
+    },
+    {
+      title: "VC Matches",
+      url: "/sourcing/matches",
+      icon: IconSparkles,
     },
     {
       title: "Introductions",

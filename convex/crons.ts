@@ -33,4 +33,12 @@ crons.daily(
   internal.backgroundJobs.cleanupOldRecords
 );
 
+// Auto-match qualified startups with VCs every 4 hours
+// Finds high-quality matches based on stage, sector, and relationship
+crons.interval(
+  "auto-vc-matching",
+  { hours: 4 },
+  internal.backgroundJobs.runAutoMatching
+);
+
 export default crons;

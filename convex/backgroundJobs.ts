@@ -834,3 +834,187 @@ function calculateFounderScore(profile: LinkedInProfile): {
 
   return { educationScore, experienceScore, overallScore };
 }
+
+// ============ AUTO VC MATCHING ============
+
+// Helper to infer sectors from SIC codes (for matching)
+function inferSectorsFromSIC(sicCodes: string[]): string[] {
+  const sectors: string[] = [];
+
+  const sicToSector: Record<string, string> = {
+    "62": "software",
+    "63": "data",
+    "72": "ai",
+    "64": "fintech",
+    "65": "insurtech",
+    "66": "fintech",
+    "86": "healthtech",
+    "85": "edtech",
+    "68": "proptech",
+    "35": "cleantech",
+    "38": "cleantech",
+    "47": "ecommerce",
+    "49": "logistics",
+    "52": "logistics",
+    "14": "fashion",
+    "13": "fashion",
+    "46": "fashion",
+    "74": "fashion",
+  };
+
+  const specificSicCodes: Record<string, string> = {
+    "1413": "fashion",
+    "1414": "fashion",
+    "1419": "fashion",
+    "1420": "fashion",
+    "4642": "fashion",
+    "4771": "fashion",
+    "4772": "fashion",
+    "7410": "fashion",
+    "6201": "software",
+    "6202": "software",
+    "6311": "data",
+    "6312": "data",
+  };
+
+  for (const sic of sicCodes) {
+    const fourDigit = sic.substring(0, 4);
+    if (specificSicCodes[fourDigit] && !sectors.includes(specificSicCodes[fourDigit])) {
+      sectors.push(specificSicCodes[fourDigit]);
+      continue;
+    }
+
+    const prefix = sic.substring(0, 2);
+    if (sicToSector[prefix] && !sectors.includes(sicToSector[prefix])) {
+      sectors.push(sicToSector[prefix]);
+    }
+  }
+
+  const hasFashion = sectors.includes("fashion");
+  const hasTech = sectors.includes("software") || sectors.includes("ecommerce") || sectors.includes("data");
+  if (hasFashion && hasTech) {
+    sectors.push("fashion-tech");
+  }
+
+  return sectors;
+}
+
+// Auto-match qualified startups with VCs
+export const runAutoMatching = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all users with settings
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobs.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      try {
+        // Get qualified startups for this user
+        const qualifiedStartups = await ctx.runQuery(internal.backgroundJobs.getQualifiedStartups, {
+          userId: settings.userId,
+        });
+
+        if (qualifiedStartups.length === 0) continue;
+
+        // Get all VCs for this user
+        const vcs = await ctx.runQuery(internal.backgroundJobs.getUserVCs, {
+          userId: settings.userId,
+        });
+
+        if (vcs.length === 0) continue;
+
+        // Get existing introductions
+        const existingIntros = await ctx.runQuery(internal.backgroundJobs.getUserIntroductions, {
+          userId: settings.userId,
+        });
+
+        let matchesFound = 0;
+
+        // Check for high-quality matches (score >= 50)
+        for (const startup of qualifiedStartups) {
+          const introducedVcIds = new Set(
+            existingIntros
+              .filter((i) => i.startupId === startup._id)
+              .map((i) => i.vcConnectionId)
+          );
+
+          const startupSectors = inferSectorsFromSIC(startup.sicCodes ?? []);
+          const startupStage = startup.fundingStage?.toLowerCase() || "pre-seed";
+
+          for (const vc of vcs) {
+            // Skip if already introduced
+            if (introducedVcIds.has(vc._id)) continue;
+
+            let score = 0;
+
+            // Stage matching (40 points)
+            const vcStages = (vc.investmentStages ?? []).map((s) => s.toLowerCase());
+            if (vcStages.includes(startupStage)) {
+              score += 40;
+            }
+
+            // Sector matching (20 points)
+            const vcSectors = (vc.sectors ?? []).map((s) => s.toLowerCase());
+            for (const sector of startupSectors) {
+              if (vcSectors.some((vs) => vs.includes(sector) || sector.includes(vs))) {
+                score += 20;
+                break;
+              }
+            }
+
+            // Relationship bonus (25 points max)
+            if (vc.relationshipStrength === "strong") score += 25;
+            else if (vc.relationshipStrength === "moderate") score += 15;
+            else score += 5;
+
+            // Recent contact bonus (10 points)
+            if (vc.lastContactDate) {
+              const daysSinceContact = (Date.now() - vc.lastContactDate) / (1000 * 60 * 60 * 24);
+              if (daysSinceContact < 30) score += 10;
+            }
+
+            // If score is 60+, it's a strong match
+            if (score >= 60) {
+              matchesFound++;
+            }
+          }
+        }
+
+        console.log(`Auto-matching for user ${settings.userId}: ${matchesFound} high-quality matches found across ${qualifiedStartups.length} startups`);
+      } catch (error) {
+        console.error(`Auto-matching failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
+// Helper queries for auto-matching
+export const getQualifiedStartups = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("startups")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.eq(q.field("stage"), "qualified"))
+      .collect();
+  },
+});
+
+export const getUserVCs = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vcConnections")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+  },
+});
+
+export const getUserIntroductions = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("introductions")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+  },
+});
