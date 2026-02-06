@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // List all outreach for the current user
 export const list = query({
@@ -9,11 +10,7 @@ export const list = query({
     founderId: v.optional(v.id("founders")),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     let outreachList;
 
@@ -54,14 +51,11 @@ export const list = query({
 export const listWithDetails = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     const outreachList = await ctx.db
       .query("outreach")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .collect();
 
@@ -87,14 +81,11 @@ export const listWithDetails = query({
 export const getStats = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
 
     const outreachList = await ctx.db
       .query("outreach")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     const stats = {
@@ -139,20 +130,17 @@ export const create = mutation({
     scheduledFor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Verify founder exists and belongs to user
     const founder = await ctx.db.get(args.founderId);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 
     return await ctx.db.insert("outreach", {
       ...args,
-      userId: identity.subject,
+      userId,
       status: args.scheduledFor ? "scheduled" : "draft",
       createdAt: Date.now(),
     });
@@ -181,13 +169,10 @@ export const updateStatus = mutation({
     )),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const outreach = await ctx.db.get(args.id);
-    if (!outreach || outreach.userId !== identity.subject) {
+    if (!outreach || outreach.userId !== userId) {
       throw new Error("Outreach not found");
     }
 
@@ -216,13 +201,10 @@ export const update = mutation({
     scheduledFor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const outreach = await ctx.db.get(args.id);
-    if (!outreach || outreach.userId !== identity.subject) {
+    if (!outreach || outreach.userId !== userId) {
       throw new Error("Outreach not found");
     }
 
@@ -238,13 +220,10 @@ export const remove = mutation({
     id: v.id("outreach"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const outreach = await ctx.db.get(args.id);
-    if (!outreach || outreach.userId !== identity.subject) {
+    if (!outreach || outreach.userId !== userId) {
       throw new Error("Outreach not found");
     }
 

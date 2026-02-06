@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
+import { getUserId } from "./authHelpers";
 
 // List all startups for the current user
 export const list = query({
@@ -8,11 +9,7 @@ export const list = query({
     stage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     if (args.stage) {
       return await ctx.db
@@ -38,12 +35,9 @@ export const get = query({
     id: v.id("startups"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
     const startup = await ctx.db.get(args.id);
-    if (!startup || startup.userId !== identity.subject) {
+    if (!startup || startup.userId !== userId) {
       return null;
     }
     return startup;
@@ -56,15 +50,12 @@ export const search = query({
     searchTerm: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db
       .query("startups")
       .withSearchIndex("search_company_name", (q) =>
-        q.search("companyName", args.searchTerm).eq("userId", identity.subject)
+        q.search("companyName", args.searchTerm).eq("userId", userId)
       )
       .take(20);
   },
@@ -74,11 +65,7 @@ export const search = query({
 export const getPipelineStats = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     const startups = await ctx.db
       .query("startups")
@@ -136,14 +123,11 @@ export const create = mutation({
     fundingStage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("startups", {
       ...args,
-      userId: identity.subject,
+      userId,
       discoveredAt: Date.now(),
       stage: "discovered",
     });
@@ -176,13 +160,10 @@ export const update = mutation({
     tractionScore: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const startup = await ctx.db.get(args.id);
-    if (!startup || startup.userId !== identity.subject) {
+    if (!startup || startup.userId !== userId) {
       throw new Error("Startup not found");
     }
 
@@ -198,13 +179,10 @@ export const remove = mutation({
     id: v.id("startups"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const startup = await ctx.db.get(args.id);
-    if (!startup || startup.userId !== identity.subject) {
+    if (!startup || startup.userId !== userId) {
       throw new Error("Startup not found");
     }
 
@@ -227,16 +205,13 @@ export const bulkCreate = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const insertedIds: Array<Id<"startups">> = [];
     for (const startup of args.startups) {
       const id = await ctx.db.insert("startups", {
         ...startup,
-        userId: identity.subject,
+        userId,
         source: "companies_house",
         discoveredAt: Date.now(),
         stage: "discovered",

@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // List all introductions for the current user
 export const list = query({
@@ -9,10 +10,7 @@ export const list = query({
     vcConnectionId: v.optional(v.id("vcConnections")),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     let introductions;
 
@@ -31,13 +29,13 @@ export const list = query({
     } else {
       introductions = await ctx.db
         .query("introductions")
-        .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+        .withIndex("by_user", (q) => q.eq("userId", userId))
         .order("desc")
         .collect();
     }
 
     // Filter by user and status
-    introductions = introductions.filter((i) => i.userId === identity.subject);
+    introductions = introductions.filter((i) => i.userId === userId);
     if (args.status) {
       introductions = introductions.filter((i) => i.status === args.status);
     }
@@ -50,14 +48,11 @@ export const list = query({
 export const listWithDetails = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     const introductions = await ctx.db
       .query("introductions")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .collect();
 
@@ -85,14 +80,11 @@ export const listWithDetails = query({
 export const getStats = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
 
     const introductions = await ctx.db
       .query("introductions")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     const stats = {
@@ -128,25 +120,22 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Verify startup and VC connection exist and belong to user
     const startup = await ctx.db.get(args.startupId);
-    if (!startup || startup.userId !== identity.subject) {
+    if (!startup || startup.userId !== userId) {
       throw new Error("Startup not found");
     }
 
     const vcConnection = await ctx.db.get(args.vcConnectionId);
-    if (!vcConnection || vcConnection.userId !== identity.subject) {
+    if (!vcConnection || vcConnection.userId !== userId) {
       throw new Error("VC connection not found");
     }
 
     return await ctx.db.insert("introductions", {
       ...args,
-      userId: identity.subject,
+      userId,
       status: "considering",
       createdAt: Date.now(),
     });
@@ -171,13 +160,10 @@ export const updateStatus = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const introduction = await ctx.db.get(args.id);
-    if (!introduction || introduction.userId !== identity.subject) {
+    if (!introduction || introduction.userId !== userId) {
       throw new Error("Introduction not found");
     }
 
@@ -199,13 +185,10 @@ export const remove = mutation({
     id: v.id("introductions"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const introduction = await ctx.db.get(args.id);
-    if (!introduction || introduction.userId !== identity.subject) {
+    if (!introduction || introduction.userId !== userId) {
       throw new Error("Introduction not found");
     }
 

@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // List all VC connections for the current user
 export const list = query({
@@ -11,14 +12,11 @@ export const list = query({
     )),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     let connections = await ctx.db
       .query("vcConnections")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .collect();
 
@@ -38,12 +36,9 @@ export const get = query({
     id: v.id("vcConnections"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
     const connection = await ctx.db.get(args.id);
-    if (!connection || connection.userId !== identity.subject) {
+    if (!connection || connection.userId !== userId) {
       return null;
     }
     return connection;
@@ -56,15 +51,12 @@ export const search = query({
     searchTerm: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db
       .query("vcConnections")
       .withSearchIndex("search_vc_name", (q) =>
-        q.search("vcName", args.searchTerm).eq("userId", identity.subject)
+        q.search("vcName", args.searchTerm).eq("userId", userId)
       )
       .take(20);
   },
@@ -77,14 +69,11 @@ export const findMatchingVCs = query({
     investmentStage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     const connections = await ctx.db
       .query("vcConnections")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     return connections.filter((vc) => {
@@ -129,14 +118,11 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("vcConnections", {
       ...args,
-      userId: identity.subject,
+      userId,
       createdAt: Date.now(),
     });
   },
@@ -162,13 +148,10 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const connection = await ctx.db.get(args.id);
-    if (!connection || connection.userId !== identity.subject) {
+    if (!connection || connection.userId !== userId) {
       throw new Error("VC connection not found");
     }
 
@@ -184,13 +167,10 @@ export const remove = mutation({
     id: v.id("vcConnections"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const connection = await ctx.db.get(args.id);
-    if (!connection || connection.userId !== identity.subject) {
+    if (!connection || connection.userId !== userId) {
       throw new Error("VC connection not found");
     }
 
@@ -222,15 +202,12 @@ export const bulkImport = mutation({
     skipDuplicates: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Get existing VCs to check for duplicates
     const existingVCs = await ctx.db
       .query("vcConnections")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     const existingFirmNames = new Set(
@@ -250,7 +227,7 @@ export const bulkImport = mutation({
 
       await ctx.db.insert("vcConnections", {
         ...vc,
-        userId: identity.subject,
+        userId,
         createdAt: Date.now(),
       });
       imported++;
@@ -266,27 +243,24 @@ export const getMatchingVCsForStartup = query({
     startupId: v.id("startups"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     // Get the startup
     const startup = await ctx.db.get(args.startupId);
-    if (!startup || startup.userId !== identity.subject) {
+    if (!startup || startup.userId !== userId) {
       return [];
     }
 
     // Get all VC connections
     const vcs = await ctx.db
       .query("vcConnections")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     // Get existing introductions to avoid duplicates
     const existingIntros = await ctx.db
       .query("introductions")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .filter((q) => q.eq(q.field("startupId"), args.startupId))
       .collect();
 
@@ -437,28 +411,25 @@ function inferSectorsFromSIC(sicCodes: string[]): string[] {
 export const getVCMatchesForQualifiedStartups = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     // Get qualified startups
     const startups = await ctx.db
       .query("startups")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .filter((q) => q.eq(q.field("stage"), "qualified"))
       .collect();
 
     // Get all VCs
     const vcs = await ctx.db
       .query("vcConnections")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     // Get all existing introductions
     const introductions = await ctx.db
       .query("introductions")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     const matches: Array<{

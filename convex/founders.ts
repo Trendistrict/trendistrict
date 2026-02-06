@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // Education entry validator
 const educationValidator = v.object({
@@ -29,11 +30,7 @@ export const list = query({
     minScore: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     let founders;
     if (args.startupId) {
@@ -66,12 +63,9 @@ export const get = query({
     id: v.id("founders"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
     const founder = await ctx.db.get(args.id);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       return null;
     }
     return founder;
@@ -82,14 +76,11 @@ export const get = query({
 export const listWithStartups = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     const founders = await ctx.db
       .query("founders")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .collect();
 
@@ -115,14 +106,11 @@ export const getTopFounders = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     const founders = await ctx.db
       .query("founders")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     // Sort by overall score descending
@@ -154,14 +142,11 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("founders", {
       ...args,
-      userId: identity.subject,
+      userId,
       discoveredAt: Date.now(),
     });
   },
@@ -190,13 +175,10 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const founder = await ctx.db.get(args.id);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 
@@ -212,13 +194,10 @@ export const remove = mutation({
     id: v.id("founders"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const founder = await ctx.db.get(args.id);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 
@@ -233,13 +212,10 @@ export const calculateScore = mutation({
     id: v.id("founders"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const founder = await ctx.db.get(args.id);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 

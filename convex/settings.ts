@@ -1,18 +1,16 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // Get user settings
 export const get = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    const userId = await getUserId(ctx);
 
     const settings = await ctx.db
       .query("userSettings")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
 
     return settings;
@@ -33,14 +31,11 @@ export const upsert = mutation({
     autoScoreFounders: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const existing = await ctx.db
       .query("userSettings")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
 
     if (existing) {
@@ -52,7 +47,7 @@ export const upsert = mutation({
     } else {
       return await ctx.db.insert("userSettings", {
         ...args,
-        userId: identity.subject,
+        userId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -66,23 +61,20 @@ export const listTemplates = query({
     type: v.optional(v.union(v.literal("email"), v.literal("linkedin"))),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     if (args.type) {
       return await ctx.db
         .query("templates")
         .withIndex("by_user_and_type", (q) =>
-          q.eq("userId", identity.subject).eq("type", args.type!)
+          q.eq("userId", userId).eq("type", args.type!)
         )
         .collect();
     }
 
     return await ctx.db
       .query("templates")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
   },
 });
@@ -97,14 +89,11 @@ export const createTemplate = mutation({
     variables: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("templates", {
       ...args,
-      userId: identity.subject,
+      userId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
@@ -121,13 +110,10 @@ export const updateTemplate = mutation({
     variables: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const template = await ctx.db.get(args.id);
-    if (!template || template.userId !== identity.subject) {
+    if (!template || template.userId !== userId) {
       throw new Error("Template not found");
     }
 
@@ -146,13 +132,10 @@ export const deleteTemplate = mutation({
     id: v.id("templates"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const template = await ctx.db.get(args.id);
-    if (!template || template.userId !== identity.subject) {
+    if (!template || template.userId !== userId) {
       throw new Error("Template not found");
     }
 
@@ -165,14 +148,11 @@ export const deleteTemplate = mutation({
 export const listHighGrowthCompanies = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db
       .query("highGrowthCompanies")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
   },
 });
@@ -184,14 +164,11 @@ export const addHighGrowthCompany = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("highGrowthCompanies", {
       ...args,
-      userId: identity.subject,
+      userId,
     });
   },
 });
@@ -201,13 +178,10 @@ export const removeHighGrowthCompany = mutation({
     id: v.id("highGrowthCompanies"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const company = await ctx.db.get(args.id);
-    if (!company || company.userId !== identity.subject) {
+    if (!company || company.userId !== userId) {
       throw new Error("Company not found");
     }
 
@@ -220,14 +194,11 @@ export const removeHighGrowthCompany = mutation({
 export const listTopUniversities = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db
       .query("topUniversities")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
   },
 });
@@ -239,14 +210,11 @@ export const addTopUniversity = mutation({
     country: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     return await ctx.db.insert("topUniversities", {
       ...args,
-      userId: identity.subject,
+      userId,
     });
   },
 });
@@ -256,13 +224,10 @@ export const removeTopUniversity = mutation({
     id: v.id("topUniversities"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const university = await ctx.db.get(args.id);
-    if (!university || university.userId !== identity.subject) {
+    if (!university || university.userId !== userId) {
       throw new Error("University not found");
     }
 
@@ -275,12 +240,7 @@ export const removeTopUniversity = mutation({
 export const seedDefaultTemplates = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
-
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     // Check if templates already exist
     const existingTemplates = await ctx.db
@@ -374,12 +334,7 @@ Robbie`,
 export const seedDefaults = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
-
-    const userId = identity.subject;
+    const userId = await getUserId(ctx);
 
     // Check if already seeded
     const existingCompanies = await ctx.db
