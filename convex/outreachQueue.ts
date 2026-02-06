@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
 
 // List items in the outreach queue
 export const list = query({
@@ -14,14 +15,11 @@ export const list = query({
     ),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await getUserId(ctx);
 
     let items = await ctx.db
       .query("outreachQueue")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("desc")
       .collect();
 
@@ -50,14 +48,11 @@ export const list = query({
 export const getStats = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return { queued: 0, sent: 0, failed: 0 };
-    }
+    const userId = await getUserId(ctx);
 
     const items = await ctx.db
       .query("outreachQueue")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
     return {
@@ -82,21 +77,18 @@ export const queueOutreach = mutation({
     priority: v.optional(v.number()), // Lower = higher priority (default: 100)
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Verify founder exists and belongs to user
     const founder = await ctx.db.get(args.founderId);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 
     // Check if founder is already in queue
     const existingQueue = await ctx.db
       .query("outreachQueue")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .filter((q) =>
         q.and(
           q.eq(q.field("founderId"), args.founderId),
@@ -120,7 +112,7 @@ export const queueOutreach = mutation({
     const now = Date.now();
 
     return await ctx.db.insert("outreachQueue", {
-      userId: identity.subject,
+      userId,
       founderId: args.founderId,
       startupId: args.startupId,
       type: args.type,
@@ -145,20 +137,17 @@ export const queuePersonalizedOutreach = mutation({
     scheduledFor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Get founder
     const founder = await ctx.db.get(args.founderId);
-    if (!founder || founder.userId !== identity.subject) {
+    if (!founder || founder.userId !== userId) {
       throw new Error("Founder not found");
     }
 
     // Get template
     const template = await ctx.db.get(args.templateId);
-    if (!template || template.userId !== identity.subject) {
+    if (!template || template.userId !== userId) {
       throw new Error("Template not found");
     }
 
@@ -187,7 +176,7 @@ export const queuePersonalizedOutreach = mutation({
     const now = Date.now();
 
     return await ctx.db.insert("outreachQueue", {
-      userId: identity.subject,
+      userId,
       founderId: args.founderId,
       startupId: args.startupId,
       type: template.type,
@@ -224,14 +213,11 @@ export const queueBatchOutreach = mutation({
     delayBetweenMs: v.optional(v.number()), // Delay between each message (default: 30 min)
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     // Get template
     const template = await ctx.db.get(args.templateId);
-    if (!template || template.userId !== identity.subject) {
+    if (!template || template.userId !== userId) {
       throw new Error("Template not found");
     }
 
@@ -243,7 +229,7 @@ export const queueBatchOutreach = mutation({
 
     for (const founderId of args.founderIds) {
       const founder = await ctx.db.get(founderId);
-      if (!founder || founder.userId !== identity.subject) {
+      if (!founder || founder.userId !== userId) {
         skipped.push(founderId);
         continue;
       }
@@ -257,7 +243,7 @@ export const queueBatchOutreach = mutation({
       // Check if already queued
       const existingQueue = await ctx.db
         .query("outreachQueue")
-        .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+        .withIndex("by_user", (q) => q.eq("userId", userId))
         .filter((q) =>
           q.and(
             q.eq(q.field("founderId"), founderId),
@@ -294,7 +280,7 @@ export const queueBatchOutreach = mutation({
       });
 
       await ctx.db.insert("outreachQueue", {
-        userId: identity.subject,
+        userId,
         founderId,
         startupId: founder.startupId,
         type: template.type,
@@ -327,13 +313,10 @@ export const cancelOutreach = mutation({
     queueId: v.id("outreachQueue"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const item = await ctx.db.get(args.queueId);
-    if (!item || item.userId !== identity.subject) {
+    if (!item || item.userId !== userId) {
       throw new Error("Queue item not found");
     }
 
@@ -352,13 +335,10 @@ export const retryOutreach = mutation({
     queueId: v.id("outreachQueue"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const item = await ctx.db.get(args.queueId);
-    if (!item || item.userId !== identity.subject) {
+    if (!item || item.userId !== userId) {
       throw new Error("Queue item not found");
     }
 
@@ -381,14 +361,11 @@ export const retryOutreach = mutation({
 export const clearFailed = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = await getUserId(ctx);
 
     const failedItems = await ctx.db
       .query("outreachQueue")
-      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .withIndex("by_user", (q) => q.eq("userId", userId))
       .filter((q) => q.eq(q.field("status"), "failed"))
       .collect();
 

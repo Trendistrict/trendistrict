@@ -3,6 +3,7 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { DEFAULT_USER_ID } from "./authHelpers";
 
 // Comprehensive SIC code categories for different startup verticals
 const SIC_CODE_CATEGORIES = {
@@ -187,9 +188,7 @@ export const runAutoSourcing = action({
     companies: Array<{ name: string; number: string; incorporated: string }>;
   }> => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = identity?.subject ?? DEFAULT_USER_ID;
 
     const daysBack = args.daysBack ?? 30;
     // Get all SIC codes from all categories if none specified
@@ -250,7 +249,7 @@ export const runAutoSourcing = action({
 
         // Save to database
         await ctx.runMutation(internal.autoSourcingHelpers.saveDiscoveredStartup, {
-          userId: identity.subject,
+          userId,
           company: {
             companyNumber: company.companyNumber,
             companyName: company.companyName,
@@ -372,11 +371,6 @@ export const enrichWithLinkedIn = action({
     searchByName: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
-
     // Get founder details
     const founder = await ctx.runQuery(internal.autoSourcingHelpers.getFounder, {
       founderId: args.founderId,
@@ -752,13 +746,11 @@ export const enrichDiscoveredStartups = action({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
+    const userId = identity?.subject ?? DEFAULT_USER_ID;
 
     // Get startups that need enrichment
     const startups = await ctx.runQuery(internal.autoSourcingHelpers.getStartupsNeedingEnrichment, {
-      userId: identity.subject,
+      userId,
       limit: args.limit ?? 10,
     });
 

@@ -14,6 +14,7 @@ import {
   getRateLimitStatus,
   ApiName,
 } from "./lib/rateLimiter";
+import { getUserId } from "./authHelpers";
 
 // ============ JOB MANAGEMENT ============
 
@@ -82,9 +83,8 @@ export const getRecentJobsQuery = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    return await getRecentJobs(ctx, identity.subject, args.limit ?? 10);
+    const userId = await getUserId(ctx);
+    return await getRecentJobs(ctx, userId, args.limit ?? 10);
   },
 });
 
@@ -115,8 +115,7 @@ export const getRateLimitStatusQuery = query({
     apiName: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-    return await getRateLimitStatus(ctx, identity.subject, args.apiName as ApiName);
+    const userId = await getUserId(ctx);
+    return await getRateLimitStatus(ctx, userId, args.apiName as ApiName);
   },
 });
