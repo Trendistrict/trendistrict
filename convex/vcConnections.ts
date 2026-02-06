@@ -199,6 +199,67 @@ export const remove = mutation({
   },
 });
 
+// Bulk import VCs
+export const bulkImport = mutation({
+  args: {
+    vcs: v.array(
+      v.object({
+        vcName: v.string(),
+        firmName: v.string(),
+        email: v.optional(v.string()),
+        linkedInUrl: v.optional(v.string()),
+        investmentStages: v.optional(v.array(v.string())),
+        sectors: v.optional(v.array(v.string())),
+        checkSize: v.optional(v.string()),
+        relationshipStrength: v.union(
+          v.literal("weak"),
+          v.literal("moderate"),
+          v.literal("strong")
+        ),
+        notes: v.optional(v.string()),
+      })
+    ),
+    skipDuplicates: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    // Get existing VCs to check for duplicates
+    const existingVCs = await ctx.db
+      .query("vcConnections")
+      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .collect();
+
+    const existingFirmNames = new Set(
+      existingVCs.map((vc) => `${vc.vcName.toLowerCase()}-${vc.firmName.toLowerCase()}`)
+    );
+
+    let imported = 0;
+    let skipped = 0;
+
+    for (const vc of args.vcs) {
+      const key = `${vc.vcName.toLowerCase()}-${vc.firmName.toLowerCase()}`;
+
+      if (args.skipDuplicates && existingFirmNames.has(key)) {
+        skipped++;
+        continue;
+      }
+
+      await ctx.db.insert("vcConnections", {
+        ...vc,
+        userId: identity.subject,
+        createdAt: Date.now(),
+      });
+      imported++;
+    }
+
+    return { imported, skipped };
+  },
+});
+
 // Smart VC matching with scoring
 export const getMatchingVCsForStartup = query({
   args: {

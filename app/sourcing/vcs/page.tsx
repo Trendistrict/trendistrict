@@ -27,7 +27,9 @@ import {
   IconBuilding,
   IconCoin,
   IconTag,
+  IconUpload,
 } from "@tabler/icons-react";
+import Link from "next/link";
 import {
   Dialog,
   DialogContent,
@@ -80,7 +82,15 @@ export default function VCNetworkPage() {
             Manage your connections with VCs for introductions
           </p>
         </div>
-        <AddVCDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+        <div className="flex gap-2">
+          <Link href="/sourcing/vcs/import">
+            <Button variant="outline">
+              <IconUpload className="h-4 w-4 mr-2" />
+              Import VCs
+            </Button>
+          </Link>
+          <AddVCDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+        </div>
       </div>
 
       {/* Stats */}
