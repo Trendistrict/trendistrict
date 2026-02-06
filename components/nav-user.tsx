@@ -2,16 +2,13 @@
 
 import {
   IconDotsVertical,
-  IconLogout,
   IconSettings,
   IconUserCircle,
 } from "@tabler/icons-react"
-import { useUser, useClerk } from "@clerk/nextjs"
 
 import {
   Avatar,
   AvatarFallback,
-  AvatarImage,
 } from "@/components/ui/avatar"
 import {
   DropdownMenu,
@@ -28,20 +25,14 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import Link from "next/link"
 
 export function NavUser() {
   const { isMobile } = useSidebar()
-  const { user } = useUser()
-  const { signOut, openUserProfile } = useClerk()
 
-  if (!user) {
-    return null
-  }
-
-  const userName = user.fullName || user.firstName || user.emailAddresses?.[0]?.emailAddress || "User"
-  const userEmail = user.primaryEmailAddress?.emailAddress || ""
-  const userAvatar = user.imageUrl || ""
-  const initials = userName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  const userName = "Robbie"
+  const userEmail = "rob.mckendrick@gmail.com"
+  const initials = "RM"
 
   return (
     <SidebarMenu>
@@ -53,7 +44,6 @@ export function NavUser() {
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarImage src={userAvatar} alt={userName} />
                 <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
@@ -74,7 +64,6 @@ export function NavUser() {
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
-                  <AvatarImage src={userAvatar} alt={userName} />
                   <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
@@ -87,20 +76,17 @@ export function NavUser() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => openUserProfile()}>
+              <DropdownMenuItem>
                 <IconUserCircle />
                 Account
               </DropdownMenuItem>
-              <DropdownMenuItem>
-                <IconSettings />
-                Settings
-              </DropdownMenuItem>
+              <Link href="/sourcing/settings">
+                <DropdownMenuItem>
+                  <IconSettings />
+                  Settings
+                </DropdownMenuItem>
+              </Link>
             </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => signOut()}>
-              <IconLogout />
-              Log out
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
