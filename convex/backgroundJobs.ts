@@ -1,6 +1,6 @@
 "use node";
 
-import { internalAction } from "./_generated/server";
+import { internalAction, ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { sleep, withRetry } from "./lib/rateLimiter";
@@ -73,7 +73,7 @@ export const runScheduledDiscovery = internalAction({
 });
 
 async function runDiscoveryBatch(
-  ctx: Parameters<typeof runScheduledDiscovery.handler>[0],
+  ctx: ActionCtx,
   userId: string,
   apiKey: string,
   limit: number,
@@ -292,7 +292,7 @@ export const runScheduledEnrichment = internalAction({
 });
 
 async function runEnrichmentBatch(
-  ctx: Parameters<typeof runScheduledEnrichment.handler>[0],
+  ctx: ActionCtx,
   userId: string,
   exaApiKey: string,
   limit: number,
