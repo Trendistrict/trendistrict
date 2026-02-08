@@ -3,8 +3,6 @@ name: Deploy Convex Backend
 on:
   push:
     branches: [main]
-    paths:
-      - 'convex/**'
   workflow_dispatch:
 
 jobs:
@@ -21,6 +19,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check Convex Deploy Key
+        run: |
+          if [ -z "$CONVEX_DEPLOY_KEY" ]; then
+            echo "ERROR: CONVEX_DEPLOY_KEY is not set!"
+            echo "Please add it in GitHub Settings -> Secrets -> Actions"
+            exit 1
+          else
+            echo "CONVEX_DEPLOY_KEY is set (length: ${#CONVEX_DEPLOY_KEY})"
+          fi
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
       - name: Deploy Convex
         env:
