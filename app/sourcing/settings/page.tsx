@@ -140,20 +140,36 @@ export default function SettingsPage() {
   };
 
   const handleRunDiscovery = async () => {
-    if (!formData.apolloApiKey && !formData.hunterApiKey) {
-      alert("Please configure Apollo or Hunter API key first");
-      return;
-    }
-
     setDiscoveryRunning(true);
     setDiscoveryResult(null);
 
     try {
+      // Auto-save settings first to ensure API keys are in the database
+      await upsertSettings({
+        companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+        exaApiKey: formData.exaApiKey || undefined,
+        emailApiKey: formData.emailApiKey || undefined,
+        emailProvider: formData.emailProvider || undefined,
+        emailFromAddress: formData.emailFromAddress || undefined,
+        emailFromName: formData.emailFromName || undefined,
+        linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
+        autoScoreFounders: formData.autoScoreFounders,
+        apolloApiKey: formData.apolloApiKey || undefined,
+        hunterApiKey: formData.hunterApiKey || undefined,
+        rocketReachApiKey: formData.rocketReachApiKey || undefined,
+        zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
+        crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+      });
+
+      // Small delay to let the mutation propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       const result = await runVcDiscovery({ manual: true, source: "bvca" });
       setDiscoveryResult(result);
     } catch (error) {
       console.error("Discovery failed:", error);
-      alert("Discovery failed. Check console for details.");
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      alert(`Discovery failed: ${errorMessage}`);
     } finally {
       setDiscoveryRunning(false);
     }
@@ -481,7 +497,7 @@ export default function SettingsPage() {
                   </div>
                   <Button
                     onClick={handleRunDiscovery}
-                    disabled={discoveryRunning || (!formData.apolloApiKey && !formData.hunterApiKey)}
+                    disabled={discoveryRunning}
                     variant="outline"
                   >
                     {discoveryRunning ? (
