@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,8 @@ import {
   IconLoader2,
   IconExternalLink,
   IconSparkles,
+  IconSearch,
+  IconPlayerPlay,
 } from "@tabler/icons-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -43,6 +45,7 @@ export default function SettingsPage() {
   const addTopUniversity = useMutation(api.settings.addTopUniversity);
   const removeTopUniversity = useMutation(api.settings.removeTopUniversity);
   const seedDefaults = useMutation(api.settings.seedDefaults);
+  const runVcDiscovery = useAction(api.vcDiscovery.runVcDiscovery);
 
   const [formData, setFormData] = useState({
     companiesHouseApiKey: "",
@@ -53,11 +56,24 @@ export default function SettingsPage() {
     emailFromName: "",
     linkedInProfileUrl: "",
     autoScoreFounders: true,
+    // VC Discovery API keys
+    apolloApiKey: "",
+    hunterApiKey: "",
+    rocketReachApiKey: "",
+    zeroBouncApiKey: "",
+    crunchbaseApiKey: "",
   });
 
   const [newCompany, setNewCompany] = useState({ name: "", category: "" });
   const [newUniversity, setNewUniversity] = useState({ name: "", tier: "tier2" as "tier1" | "tier2" | "tier3", country: "" });
   const [saving, setSaving] = useState(false);
+  const [discoveryRunning, setDiscoveryRunning] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<{
+    vcsFound: number;
+    vcsImported: number;
+    vcsFlagged: number;
+    vcsSkipped: number;
+  } | null>(null);
 
   useEffect(() => {
     if (settings) {
@@ -70,6 +86,12 @@ export default function SettingsPage() {
         emailFromName: settings.emailFromName ?? "",
         linkedInProfileUrl: settings.linkedInProfileUrl ?? "",
         autoScoreFounders: settings.autoScoreFounders ?? true,
+        // VC Discovery API keys
+        apolloApiKey: settings.apolloApiKey ?? "",
+        hunterApiKey: settings.hunterApiKey ?? "",
+        rocketReachApiKey: settings.rocketReachApiKey ?? "",
+        zeroBouncApiKey: settings.zeroBouncApiKey ?? "",
+        crunchbaseApiKey: settings.crunchbaseApiKey ?? "",
       });
     }
   }, [settings]);
@@ -86,6 +108,12 @@ export default function SettingsPage() {
         emailFromName: formData.emailFromName || undefined,
         linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
         autoScoreFounders: formData.autoScoreFounders,
+        // VC Discovery API keys
+        apolloApiKey: formData.apolloApiKey || undefined,
+        hunterApiKey: formData.hunterApiKey || undefined,
+        rocketReachApiKey: formData.rocketReachApiKey || undefined,
+        zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
+        crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
       });
     } finally {
       setSaving(false);
@@ -109,6 +137,42 @@ export default function SettingsPage() {
       country: newUniversity.country || undefined,
     });
     setNewUniversity({ name: "", tier: "tier2", country: "" });
+  };
+
+  const handleRunDiscovery = async () => {
+    setDiscoveryRunning(true);
+    setDiscoveryResult(null);
+
+    try {
+      // Auto-save settings first to ensure API keys are in the database
+      await upsertSettings({
+        companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+        exaApiKey: formData.exaApiKey || undefined,
+        emailApiKey: formData.emailApiKey || undefined,
+        emailProvider: formData.emailProvider || undefined,
+        emailFromAddress: formData.emailFromAddress || undefined,
+        emailFromName: formData.emailFromName || undefined,
+        linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
+        autoScoreFounders: formData.autoScoreFounders,
+        apolloApiKey: formData.apolloApiKey || undefined,
+        hunterApiKey: formData.hunterApiKey || undefined,
+        rocketReachApiKey: formData.rocketReachApiKey || undefined,
+        zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
+        crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+      });
+
+      // Small delay to let the mutation propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const result = await runVcDiscovery({ manual: true, source: "bvca" });
+      setDiscoveryResult(result);
+    } catch (error) {
+      console.error("Discovery failed:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      alert(`Discovery failed: ${errorMessage}`);
+    } finally {
+      setDiscoveryRunning(false);
+    }
   };
 
   return (
@@ -239,6 +303,236 @@ export default function SettingsPage() {
                   }
                   placeholder="https://linkedin.com/in/yourprofile"
                 />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconSearch className="h-5 w-5" />
+                VC Discovery APIs
+              </CardTitle>
+              <CardDescription>
+                APIs for automatic VC discovery and email finding (runs weekly on Sundays)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Apollo - Primary email discovery */}
+              <div className="space-y-2 p-4 border rounded-lg bg-muted/30">
+                <Label htmlFor="apolloApiKey" className="flex items-center gap-2">
+                  Apollo.io API Key
+                  <Badge variant="default" className="text-xs">Primary</Badge>
+                </Label>
+                <Input
+                  id="apolloApiKey"
+                  type="password"
+                  value={formData.apolloApiKey}
+                  onChange={(e) =>
+                    setFormData({ ...formData, apolloApiKey: e.target.value })
+                  }
+                  placeholder="Enter your Apollo.io API key"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Best for finding VC partner emails. Get your API key from{" "}
+                  <a
+                    href="https://app.apollo.io/#/settings/integrations/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Apollo Settings
+                    <IconExternalLink className="h-3 w-3 inline ml-1" />
+                  </a>
+                </p>
+                {formData.apolloApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Apollo Configured
+                  </Badge>
+                )}
+              </div>
+
+              {/* Fallback APIs */}
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Fallback APIs (optional)
+                </Label>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="hunterApiKey">Hunter.io API Key</Label>
+                  <Input
+                    id="hunterApiKey"
+                    type="password"
+                    value={formData.hunterApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, hunterApiKey: e.target.value })
+                    }
+                    placeholder="Enter your Hunter.io API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Find partner emails via{" "}
+                    <a
+                      href="https://hunter.io/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Hunter.io
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rocketReachApiKey">RocketReach API Key</Label>
+                  <Input
+                    id="rocketReachApiKey"
+                    type="password"
+                    value={formData.rocketReachApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, rocketReachApiKey: e.target.value })
+                    }
+                    placeholder="Enter your RocketReach API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Backup email discovery via{" "}
+                    <a
+                      href="https://rocketreach.co/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      RocketReach
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="zeroBouncApiKey">ZeroBounce API Key</Label>
+                  <Input
+                    id="zeroBouncApiKey"
+                    type="password"
+                    value={formData.zeroBouncApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, zeroBouncApiKey: e.target.value })
+                    }
+                    placeholder="Enter your ZeroBounce API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Email validation via{" "}
+                    <a
+                      href="https://www.zerobounce.net/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      ZeroBounce
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="crunchbaseApiKey">Crunchbase API Key</Label>
+                  <Input
+                    id="crunchbaseApiKey"
+                    type="password"
+                    value={formData.crunchbaseApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, crunchbaseApiKey: e.target.value })
+                    }
+                    placeholder="Enter your Crunchbase API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Portfolio data via{" "}
+                    <a
+                      href="https://www.crunchbase.com/home"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Crunchbase
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {formData.hunterApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Hunter.io
+                  </Badge>
+                )}
+                {formData.rocketReachApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    RocketReach
+                  </Badge>
+                )}
+                {formData.zeroBouncApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    ZeroBounce
+                  </Badge>
+                )}
+                {formData.crunchbaseApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Crunchbase
+                  </Badge>
+                )}
+              </div>
+
+              {/* Run Discovery Now */}
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Run Discovery Now</p>
+                    <p className="text-xs text-muted-foreground">
+                      Manually trigger VC discovery (scrapes BVCA, finds emails via Apollo)
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleRunDiscovery}
+                    disabled={discoveryRunning}
+                    variant="outline"
+                  >
+                    {discoveryRunning ? (
+                      <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <IconPlayerPlay className="h-4 w-4 mr-2" />
+                    )}
+                    {discoveryRunning ? "Running..." : "Run Now"}
+                  </Button>
+                </div>
+
+                {/* Discovery Results */}
+                {discoveryResult && (
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
+                    <p className="text-sm font-medium mb-2">Discovery Results</p>
+                    <div className="grid grid-cols-4 gap-2 text-center text-sm">
+                      <div>
+                        <div className="text-lg font-semibold">{discoveryResult.vcsFound}</div>
+                        <div className="text-xs text-muted-foreground">Found</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-green-600">{discoveryResult.vcsImported}</div>
+                        <div className="text-xs text-muted-foreground">Imported</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-yellow-600">{discoveryResult.vcsFlagged}</div>
+                        <div className="text-xs text-muted-foreground">Flagged</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-gray-500">{discoveryResult.vcsSkipped}</div>
+                        <div className="text-xs text-muted-foreground">Skipped</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

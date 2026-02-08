@@ -41,4 +41,13 @@ crons.interval(
   internal.backgroundJobs.runAutoMatching
 );
 
+// Discover new VCs weekly on Sunday at midnight UTC
+// Scrapes BVCA, discovers partner emails, and validates VCs
+// Target: 15-20 new VCs per week
+crons.weekly(
+  "auto-vc-discovery",
+  { dayOfWeek: "sunday", hourUTC: 0, minuteUTC: 0 },
+  internal.backgroundJobs.runScheduledVcDiscovery
+);
+
 export default crons;
