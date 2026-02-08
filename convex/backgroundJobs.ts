@@ -662,6 +662,41 @@ function calculateFounderScore(profile: LinkedInProfile): {
   return { educationScore, experienceScore, overallScore };
 }
 
+// ============ SCHEDULED VC DISCOVERY ============
+
+export const runScheduledVcDiscovery = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all users with VC discovery enabled (have Hunter.io API key configured)
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      // Only run for users who have at least one VC discovery API key configured
+      if (!settings.hunterApiKey) {
+        console.log(`Skipping VC discovery for user ${settings.userId}: no Hunter API key`);
+        continue;
+      }
+
+      try {
+        console.log(`Starting VC discovery for user ${settings.userId}`);
+
+        // Run the VC discovery action
+        const result = await ctx.runAction(internal.vcDiscovery.runVcDiscoveryInternal, {
+          userId: settings.userId,
+        });
+
+        console.log(
+          `VC Discovery completed for user ${settings.userId}: ` +
+          `found ${result.vcsFound}, imported ${result.vcsImported}, ` +
+          `flagged ${result.vcsFlagged}, skipped ${result.vcsSkipped}`
+        );
+      } catch (error) {
+        console.error(`VC discovery failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
 // ============ AUTO VC MATCHING ============
 
 // Helper to infer sectors from SIC codes (for matching)

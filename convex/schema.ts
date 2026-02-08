@@ -160,11 +160,46 @@ export default defineSchema({
     firmName: v.string(),
     email: v.optional(v.string()),
     linkedInUrl: v.optional(v.string()),
+    website: v.optional(v.string()),
 
     // Focus areas
     investmentStages: v.optional(v.array(v.string())), // pre-seed, seed, series-a
     sectors: v.optional(v.array(v.string())), // fintech, healthtech, etc.
     checkSize: v.optional(v.string()), // "$250k-$2m"
+
+    // Partner emails (multiple contacts per firm)
+    partnerEmails: v.optional(v.array(v.object({
+      name: v.string(),
+      email: v.string(),
+      role: v.optional(v.string()),
+      linkedInUrl: v.optional(v.string()),
+      emailVerified: v.optional(v.boolean()),
+      emailSource: v.optional(v.string()),
+    }))),
+
+    // Portfolio companies for validation & conflict detection
+    portfolioCompanies: v.optional(v.array(v.object({
+      name: v.string(),
+      sector: v.optional(v.string()),
+      stage: v.optional(v.string()),
+      investmentDate: v.optional(v.string()),
+      url: v.optional(v.string()),
+    }))),
+
+    // Discovery metadata
+    discoveredFrom: v.optional(v.string()),
+    discoveredAt: v.optional(v.number()),
+
+    // Validation & activity scoring
+    activityScore: v.optional(v.number()),
+    validationStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("validated"),
+      v.literal("needs_review"),
+      v.literal("rejected")
+    )),
+    validationErrors: v.optional(v.array(v.string())),
+    lastActivityDate: v.optional(v.number()),
 
     // Relationship
     relationshipStrength: v.union(
@@ -178,8 +213,13 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
+    .index("by_validation_status", ["userId", "validationStatus"])
     .searchIndex("search_vc_name", {
       searchField: "vcName",
+      filterFields: ["userId"],
+    })
+    .searchIndex("search_firm_name", {
+      searchField: "firmName",
       filterFields: ["userId"],
     }),
 
@@ -245,6 +285,12 @@ export default defineSchema({
 
     // Exa.ai API key for LinkedIn enrichment
     exaApiKey: v.optional(v.string()),
+
+    // VC Discovery API keys
+    hunterApiKey: v.optional(v.string()),
+    rocketReachApiKey: v.optional(v.string()),
+    zeroBouncApiKey: v.optional(v.string()),
+    crunchbaseApiKey: v.optional(v.string()),
 
     // Preferences
     defaultOutreachTemplate: v.optional(v.id("templates")),
@@ -353,4 +399,40 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_status", ["status"])
     .index("by_scheduled", ["status", "scheduledFor"]),
+
+  // VC Discovery tracking
+  vcDiscoveryLog: defineTable({
+    userId: v.string(),
+
+    // Run metadata
+    runId: v.string(),
+    runType: v.union(v.literal("scheduled"), v.literal("manual")),
+    source: v.string(),
+
+    // Timing
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+
+    // Results
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed")
+    ),
+    vcsFound: v.number(),
+    vcsImported: v.number(),
+    vcsFlagged: v.number(),
+    vcsSkipped: v.number(),
+
+    // Details
+    importedVcIds: v.optional(v.array(v.id("vcConnections"))),
+    flaggedVcIds: v.optional(v.array(v.id("vcConnections"))),
+    errors: v.optional(v.array(v.string())),
+
+    // Raw data for debugging
+    rawResults: v.optional(v.any()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_run_id", ["runId"])
+    .index("by_status", ["status"]),
 });

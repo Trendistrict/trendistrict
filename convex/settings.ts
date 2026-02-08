@@ -27,6 +27,11 @@ export const upsert = mutation({
     emailFromName: v.optional(v.string()),
     linkedInProfileUrl: v.optional(v.string()),
     exaApiKey: v.optional(v.string()),
+    // VC Discovery API keys
+    hunterApiKey: v.optional(v.string()),
+    rocketReachApiKey: v.optional(v.string()),
+    zeroBouncApiKey: v.optional(v.string()),
+    crunchbaseApiKey: v.optional(v.string()),
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),
   },

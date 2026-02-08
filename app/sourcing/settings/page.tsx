@@ -29,6 +29,7 @@ import {
   IconLoader2,
   IconExternalLink,
   IconSparkles,
+  IconSearch,
 } from "@tabler/icons-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -53,6 +54,11 @@ export default function SettingsPage() {
     emailFromName: "",
     linkedInProfileUrl: "",
     autoScoreFounders: true,
+    // VC Discovery API keys
+    hunterApiKey: "",
+    rocketReachApiKey: "",
+    zeroBouncApiKey: "",
+    crunchbaseApiKey: "",
   });
 
   const [newCompany, setNewCompany] = useState({ name: "", category: "" });
@@ -70,6 +76,11 @@ export default function SettingsPage() {
         emailFromName: settings.emailFromName ?? "",
         linkedInProfileUrl: settings.linkedInProfileUrl ?? "",
         autoScoreFounders: settings.autoScoreFounders ?? true,
+        // VC Discovery API keys
+        hunterApiKey: settings.hunterApiKey ?? "",
+        rocketReachApiKey: settings.rocketReachApiKey ?? "",
+        zeroBouncApiKey: settings.zeroBouncApiKey ?? "",
+        crunchbaseApiKey: settings.crunchbaseApiKey ?? "",
       });
     }
   }, [settings]);
@@ -86,6 +97,11 @@ export default function SettingsPage() {
         emailFromName: formData.emailFromName || undefined,
         linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
         autoScoreFounders: formData.autoScoreFounders,
+        // VC Discovery API keys
+        hunterApiKey: formData.hunterApiKey || undefined,
+        rocketReachApiKey: formData.rocketReachApiKey || undefined,
+        zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
+        crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
       });
     } finally {
       setSaving(false);
@@ -239,6 +255,146 @@ export default function SettingsPage() {
                   }
                   placeholder="https://linkedin.com/in/yourprofile"
                 />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconSearch className="h-5 w-5" />
+                VC Discovery APIs
+              </CardTitle>
+              <CardDescription>
+                APIs for automatic VC discovery and email finding (runs weekly on Sundays)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="hunterApiKey">Hunter.io API Key</Label>
+                  <Input
+                    id="hunterApiKey"
+                    type="password"
+                    value={formData.hunterApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, hunterApiKey: e.target.value })
+                    }
+                    placeholder="Enter your Hunter.io API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Find partner emails via{" "}
+                    <a
+                      href="https://hunter.io/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Hunter.io
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rocketReachApiKey">RocketReach API Key</Label>
+                  <Input
+                    id="rocketReachApiKey"
+                    type="password"
+                    value={formData.rocketReachApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, rocketReachApiKey: e.target.value })
+                    }
+                    placeholder="Enter your RocketReach API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Backup email discovery via{" "}
+                    <a
+                      href="https://rocketreach.co/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      RocketReach
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="zeroBouncApiKey">ZeroBounce API Key</Label>
+                  <Input
+                    id="zeroBouncApiKey"
+                    type="password"
+                    value={formData.zeroBouncApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, zeroBouncApiKey: e.target.value })
+                    }
+                    placeholder="Enter your ZeroBounce API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Email validation via{" "}
+                    <a
+                      href="https://www.zerobounce.net/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      ZeroBounce
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="crunchbaseApiKey">Crunchbase API Key</Label>
+                  <Input
+                    id="crunchbaseApiKey"
+                    type="password"
+                    value={formData.crunchbaseApiKey}
+                    onChange={(e) =>
+                      setFormData({ ...formData, crunchbaseApiKey: e.target.value })
+                    }
+                    placeholder="Enter your Crunchbase API key"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Portfolio data via{" "}
+                    <a
+                      href="https://www.crunchbase.com/home"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Crunchbase
+                      <IconExternalLink className="h-3 w-3 inline ml-1" />
+                    </a>
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {formData.hunterApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Hunter.io
+                  </Badge>
+                )}
+                {formData.rocketReachApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    RocketReach
+                  </Badge>
+                )}
+                {formData.zeroBouncApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    ZeroBounce
+                  </Badge>
+                )}
+                {formData.crunchbaseApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Crunchbase
+                  </Badge>
+                )}
               </div>
             </CardContent>
           </Card>
