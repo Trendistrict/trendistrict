@@ -99,6 +99,7 @@ export default function SettingsPage() {
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
+      // Try to save with all fields (including new VC discovery API keys)
       await upsertSettings({
         companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
         exaApiKey: formData.exaApiKey || undefined,
@@ -115,6 +116,25 @@ export default function SettingsPage() {
         zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
         crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
       });
+    } catch (error) {
+      // If the new fields fail (backend not deployed), try with original fields only
+      console.log("Full save failed, trying with original fields only:", error);
+      try {
+        await upsertSettings({
+          companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+          exaApiKey: formData.exaApiKey || undefined,
+          emailApiKey: formData.emailApiKey || undefined,
+          emailProvider: formData.emailProvider || undefined,
+          emailFromAddress: formData.emailFromAddress || undefined,
+          emailFromName: formData.emailFromName || undefined,
+          linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
+          autoScoreFounders: formData.autoScoreFounders,
+        });
+        alert("Settings saved (Note: VC Discovery API keys require Convex backend deployment. Run 'npx convex login' then 'npx convex deploy' in your terminal.)");
+      } catch (fallbackError) {
+        console.error("Settings save failed:", fallbackError);
+        alert("Failed to save settings. Please try again.");
+      }
     } finally {
       setSaving(false);
     }
@@ -144,22 +164,37 @@ export default function SettingsPage() {
     setDiscoveryResult(null);
 
     try {
-      // Auto-save settings first to ensure API keys are in the database
-      await upsertSettings({
-        companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
-        exaApiKey: formData.exaApiKey || undefined,
-        emailApiKey: formData.emailApiKey || undefined,
-        emailProvider: formData.emailProvider || undefined,
-        emailFromAddress: formData.emailFromAddress || undefined,
-        emailFromName: formData.emailFromName || undefined,
-        linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
-        autoScoreFounders: formData.autoScoreFounders,
-        apolloApiKey: formData.apolloApiKey || undefined,
-        hunterApiKey: formData.hunterApiKey || undefined,
-        rocketReachApiKey: formData.rocketReachApiKey || undefined,
-        zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
-        crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
-      });
+      // Try to auto-save settings first (with fallback for old schema)
+      try {
+        await upsertSettings({
+          companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+          exaApiKey: formData.exaApiKey || undefined,
+          emailApiKey: formData.emailApiKey || undefined,
+          emailProvider: formData.emailProvider || undefined,
+          emailFromAddress: formData.emailFromAddress || undefined,
+          emailFromName: formData.emailFromName || undefined,
+          linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
+          autoScoreFounders: formData.autoScoreFounders,
+          apolloApiKey: formData.apolloApiKey || undefined,
+          hunterApiKey: formData.hunterApiKey || undefined,
+          rocketReachApiKey: formData.rocketReachApiKey || undefined,
+          zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
+          crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+        });
+      } catch {
+        // If new fields fail, save original fields only
+        console.log("Full save failed, using original fields only");
+        await upsertSettings({
+          companiesHouseApiKey: formData.companiesHouseApiKey || undefined,
+          exaApiKey: formData.exaApiKey || undefined,
+          emailApiKey: formData.emailApiKey || undefined,
+          emailProvider: formData.emailProvider || undefined,
+          emailFromAddress: formData.emailFromAddress || undefined,
+          emailFromName: formData.emailFromName || undefined,
+          linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
+          autoScoreFounders: formData.autoScoreFounders,
+        });
+      }
 
       // Small delay to let the mutation propagate
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -169,7 +204,13 @@ export default function SettingsPage() {
     } catch (error) {
       console.error("Discovery failed:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      alert(`Discovery failed: ${errorMessage}`);
+
+      // Provide more helpful error message
+      if (errorMessage.includes("Server Error") || errorMessage.includes("upsert")) {
+        alert("Discovery failed: Convex backend needs deployment. Please run 'npx convex login' then 'npx convex deploy' in your terminal to update the backend schema.");
+      } else {
+        alert(`Discovery failed: ${errorMessage}`);
+      }
     } finally {
       setDiscoveryRunning(false);
     }
