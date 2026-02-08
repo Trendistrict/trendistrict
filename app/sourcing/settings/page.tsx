@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
   IconExternalLink,
   IconSparkles,
   IconSearch,
+  IconPlayerPlay,
 } from "@tabler/icons-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -44,6 +45,7 @@ export default function SettingsPage() {
   const addTopUniversity = useMutation(api.settings.addTopUniversity);
   const removeTopUniversity = useMutation(api.settings.removeTopUniversity);
   const seedDefaults = useMutation(api.settings.seedDefaults);
+  const runVcDiscovery = useAction(api.vcDiscovery.runVcDiscovery);
 
   const [formData, setFormData] = useState({
     companiesHouseApiKey: "",
@@ -65,6 +67,13 @@ export default function SettingsPage() {
   const [newCompany, setNewCompany] = useState({ name: "", category: "" });
   const [newUniversity, setNewUniversity] = useState({ name: "", tier: "tier2" as "tier1" | "tier2" | "tier3", country: "" });
   const [saving, setSaving] = useState(false);
+  const [discoveryRunning, setDiscoveryRunning] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<{
+    vcsFound: number;
+    vcsImported: number;
+    vcsFlagged: number;
+    vcsSkipped: number;
+  } | null>(null);
 
   useEffect(() => {
     if (settings) {
@@ -128,6 +137,26 @@ export default function SettingsPage() {
       country: newUniversity.country || undefined,
     });
     setNewUniversity({ name: "", tier: "tier2", country: "" });
+  };
+
+  const handleRunDiscovery = async () => {
+    if (!formData.apolloApiKey && !formData.hunterApiKey) {
+      alert("Please configure Apollo or Hunter API key first");
+      return;
+    }
+
+    setDiscoveryRunning(true);
+    setDiscoveryResult(null);
+
+    try {
+      const result = await runVcDiscovery({ manual: true, source: "bvca" });
+      setDiscoveryResult(result);
+    } catch (error) {
+      console.error("Discovery failed:", error);
+      alert("Discovery failed. Check console for details.");
+    } finally {
+      setDiscoveryRunning(false);
+    }
   };
 
   return (
@@ -438,6 +467,55 @@ export default function SettingsPage() {
                     <IconCheck className="h-3 w-3" />
                     Crunchbase
                   </Badge>
+                )}
+              </div>
+
+              {/* Run Discovery Now */}
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Run Discovery Now</p>
+                    <p className="text-xs text-muted-foreground">
+                      Manually trigger VC discovery (scrapes BVCA, finds emails via Apollo)
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleRunDiscovery}
+                    disabled={discoveryRunning || (!formData.apolloApiKey && !formData.hunterApiKey)}
+                    variant="outline"
+                  >
+                    {discoveryRunning ? (
+                      <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <IconPlayerPlay className="h-4 w-4 mr-2" />
+                    )}
+                    {discoveryRunning ? "Running..." : "Run Now"}
+                  </Button>
+                </div>
+
+                {/* Discovery Results */}
+                {discoveryResult && (
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
+                    <p className="text-sm font-medium mb-2">Discovery Results</p>
+                    <div className="grid grid-cols-4 gap-2 text-center text-sm">
+                      <div>
+                        <div className="text-lg font-semibold">{discoveryResult.vcsFound}</div>
+                        <div className="text-xs text-muted-foreground">Found</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-green-600">{discoveryResult.vcsImported}</div>
+                        <div className="text-xs text-muted-foreground">Imported</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-yellow-600">{discoveryResult.vcsFlagged}</div>
+                        <div className="text-xs text-muted-foreground">Flagged</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-gray-500">{discoveryResult.vcsSkipped}</div>
+                        <div className="text-xs text-muted-foreground">Skipped</div>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             </CardContent>
