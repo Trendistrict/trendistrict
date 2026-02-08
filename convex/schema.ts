@@ -287,6 +287,7 @@ export default defineSchema({
     exaApiKey: v.optional(v.string()),
 
     // VC Discovery API keys
+    apolloApiKey: v.optional(v.string()), // Primary: Apollo.io for emails
     hunterApiKey: v.optional(v.string()),
     rocketReachApiKey: v.optional(v.string()),
     zeroBouncApiKey: v.optional(v.string()),

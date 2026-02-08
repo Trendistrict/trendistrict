@@ -277,6 +277,70 @@ export const scrapeVcWebsite = internalAction({
 // EMAIL DISCOVERY
 // =====================
 
+// Find emails using Apollo.io API (Primary - best for B2B contacts)
+async function findEmailsApollo(
+  domain: string,
+  apiKey: string
+): Promise<PartnerEmail[]> {
+  const emails: PartnerEmail[] = [];
+
+  try {
+    // Apollo People Search API - find people at the organization
+    const response = await fetch(
+      "https://api.apollo.io/v1/mixed_people/search",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          "X-Api-Key": apiKey,
+        },
+        body: JSON.stringify({
+          q_organization_domains: domain,
+          page: 1,
+          per_page: 10,
+          // Filter for senior roles commonly found at VCs
+          person_titles: [
+            "Partner",
+            "Managing Partner",
+            "General Partner",
+            "Principal",
+            "Managing Director",
+            "Founder",
+            "Investment Director",
+            "Venture Partner",
+          ],
+        }),
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.people && Array.isArray(data.people)) {
+        for (const person of data.people) {
+          if (person.email) {
+            emails.push({
+              name: `${person.first_name || ""} ${person.last_name || ""}`.trim(),
+              email: person.email,
+              role: person.title,
+              linkedInUrl: person.linkedin_url,
+              emailVerified: person.email_status === "verified",
+              emailSource: "apollo",
+            });
+          }
+        }
+      }
+    } else {
+      const errorText = await response.text();
+      console.error(`Apollo API error (${response.status}):`, errorText);
+    }
+  } catch (error) {
+    console.error("Apollo.io error:", error);
+  }
+
+  return emails;
+}
+
 // Find emails using Hunter.io API
 async function findEmailsHunter(
   domain: string,
@@ -383,6 +447,7 @@ export const discoverEmails = internalAction({
   args: {
     domain: v.string(),
     partnerNames: v.array(v.string()),
+    apolloApiKey: v.optional(v.string()),
     hunterApiKey: v.optional(v.string()),
     rocketReachApiKey: v.optional(v.string()),
     zeroBouncApiKey: v.optional(v.string()),
@@ -390,7 +455,16 @@ export const discoverEmails = internalAction({
   handler: async (ctx, args): Promise<PartnerEmail[]> => {
     let emails: PartnerEmail[] = [];
 
-    // 1. Try Hunter.io first
+    // 1. Try Apollo.io first (best for B2B contacts)
+    if (args.apolloApiKey) {
+      emails = await findEmailsApollo(args.domain, args.apolloApiKey);
+      if (emails.length > 0) {
+        console.log(`Apollo found ${emails.length} emails for ${args.domain}`);
+        return emails;
+      }
+    }
+
+    // 2. Try Hunter.io as fallback
     if (args.hunterApiKey) {
       emails = await findEmailsHunter(args.domain, args.hunterApiKey);
       if (emails.length > 0) {
@@ -399,7 +473,7 @@ export const discoverEmails = internalAction({
       }
     }
 
-    // 2. Try pattern guessing with validation
+    // 3. Try pattern guessing with validation
     if (args.partnerNames.length > 0) {
       const patternEmails = await findEmailsByPattern(
         args.domain,
@@ -647,6 +721,7 @@ async function runVcDiscoveryLogic(
             {
               domain,
               partnerNames: websiteData.partners.map((p) => p.name),
+              apolloApiKey: settings?.apolloApiKey,
               hunterApiKey: settings?.hunterApiKey,
               zeroBouncApiKey: settings?.zeroBouncApiKey,
             }

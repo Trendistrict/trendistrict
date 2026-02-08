@@ -672,8 +672,8 @@ export const runScheduledVcDiscovery = internalAction({
 
     for (const settings of usersWithSettings) {
       // Only run for users who have at least one VC discovery API key configured
-      if (!settings.hunterApiKey) {
-        console.log(`Skipping VC discovery for user ${settings.userId}: no Hunter API key`);
+      if (!settings.apolloApiKey && !settings.hunterApiKey) {
+        console.log(`Skipping VC discovery for user ${settings.userId}: no Apollo or Hunter API key`);
         continue;
       }
 

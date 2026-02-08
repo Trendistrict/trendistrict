@@ -55,6 +55,7 @@ export default function SettingsPage() {
     linkedInProfileUrl: "",
     autoScoreFounders: true,
     // VC Discovery API keys
+    apolloApiKey: "",
     hunterApiKey: "",
     rocketReachApiKey: "",
     zeroBouncApiKey: "",
@@ -77,6 +78,7 @@ export default function SettingsPage() {
         linkedInProfileUrl: settings.linkedInProfileUrl ?? "",
         autoScoreFounders: settings.autoScoreFounders ?? true,
         // VC Discovery API keys
+        apolloApiKey: settings.apolloApiKey ?? "",
         hunterApiKey: settings.hunterApiKey ?? "",
         rocketReachApiKey: settings.rocketReachApiKey ?? "",
         zeroBouncApiKey: settings.zeroBouncApiKey ?? "",
@@ -98,6 +100,7 @@ export default function SettingsPage() {
         linkedInProfileUrl: formData.linkedInProfileUrl || undefined,
         autoScoreFounders: formData.autoScoreFounders,
         // VC Discovery API keys
+        apolloApiKey: formData.apolloApiKey || undefined,
         hunterApiKey: formData.hunterApiKey || undefined,
         rocketReachApiKey: formData.rocketReachApiKey || undefined,
         zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
@@ -270,6 +273,47 @@ export default function SettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Apollo - Primary email discovery */}
+              <div className="space-y-2 p-4 border rounded-lg bg-muted/30">
+                <Label htmlFor="apolloApiKey" className="flex items-center gap-2">
+                  Apollo.io API Key
+                  <Badge variant="default" className="text-xs">Primary</Badge>
+                </Label>
+                <Input
+                  id="apolloApiKey"
+                  type="password"
+                  value={formData.apolloApiKey}
+                  onChange={(e) =>
+                    setFormData({ ...formData, apolloApiKey: e.target.value })
+                  }
+                  placeholder="Enter your Apollo.io API key"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Best for finding VC partner emails. Get your API key from{" "}
+                  <a
+                    href="https://app.apollo.io/#/settings/integrations/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Apollo Settings
+                    <IconExternalLink className="h-3 w-3 inline ml-1" />
+                  </a>
+                </p>
+                {formData.apolloApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Apollo Configured
+                  </Badge>
+                )}
+              </div>
+
+              {/* Fallback APIs */}
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Fallback APIs (optional)
+                </Label>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="hunterApiKey">Hunter.io API Key</Label>
