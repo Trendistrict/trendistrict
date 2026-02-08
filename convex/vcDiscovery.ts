@@ -34,77 +34,114 @@ interface PartnerEmail {
 }
 
 // =====================
-// BVCA SCRAPER
+// UK VC FALLBACK LIST
 // =====================
 
-// Scrape BVCA member directory for UK VCs
+// Curated list of well-known UK early-stage VCs
+function getUKVCFallbackList(): DiscoveredVC[] {
+  return [
+    { firmName: "Seedcamp", website: "seedcamp.com" },
+    { firmName: "Balderton Capital", website: "balderton.com" },
+    { firmName: "Index Ventures", website: "indexventures.com" },
+    { firmName: "Atomico", website: "atomico.com" },
+    { firmName: "Accel", website: "accel.com" },
+    { firmName: "LocalGlobe", website: "localglobe.vc" },
+    { firmName: "Northzone", website: "northzone.com" },
+    { firmName: "Notion Capital", website: "notion.vc" },
+    { firmName: "Episode 1", website: "episode1.com" },
+    { firmName: "Forward Partners", website: "forwardpartners.com" },
+    { firmName: "Passion Capital", website: "passioncapital.com" },
+    { firmName: "Connect Ventures", website: "connectventures.co.uk" },
+    { firmName: "MMC Ventures", website: "mmcventures.com" },
+    { firmName: "IQ Capital", website: "iqcapital.vc" },
+    { firmName: "Pentech Ventures", website: "pentechventures.com" },
+    { firmName: "Octopus Ventures", website: "octopusventures.com" },
+    { firmName: "Amadeus Capital", website: "amadeuscapital.com" },
+    { firmName: "Downing Ventures", website: "downing.co.uk" },
+    { firmName: "SFC Capital", website: "sfcapital.co.uk" },
+    { firmName: "Ada Ventures", website: "adaventures.com" },
+    { firmName: "Fuel Ventures", website: "fuel.ventures" },
+    { firmName: "Founders Factory", website: "foundersfactory.com" },
+    { firmName: "Playfair Capital", website: "playfaircapital.com" },
+    { firmName: "JamJar Investments", website: "jamjarinvestments.com" },
+    { firmName: "Firstminute Capital", website: "firstminute.capital" },
+  ];
+}
+
+// =====================
+// VC DISCOVERY VIA APOLLO
+// =====================
+
+// Search for UK VCs using Apollo Organization Search API
 export const scrapeBVCA = internalAction({
   args: {},
   handler: async (ctx): Promise<DiscoveredVC[]> => {
     const vcs: DiscoveredVC[] = [];
 
+    // Get user settings to access Apollo API key
+    const allSettings = await ctx.runQuery(
+      internal.vcDiscoveryHelpers.getAllUserSettings
+    );
+
+    // Find a user with Apollo API key configured
+    const settingsWithApollo = allSettings.find(s => s.apolloApiKey);
+
+    if (!settingsWithApollo?.apolloApiKey) {
+      console.log("No Apollo API key found, using fallback VC list");
+      // Return a curated list of well-known UK VCs as fallback
+      return getUKVCFallbackList();
+    }
+
     try {
-      // BVCA member directory page
+      // Use Apollo Organization Search API to find UK VCs
       const response = await fetch(
-        "https://www.bvca.co.uk/Member-Directory",
+        "https://api.apollo.io/v1/mixed_companies/search",
         {
+          method: "POST",
           headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "X-Api-Key": settingsWithApollo.apolloApiKey,
           },
+          body: JSON.stringify({
+            page: 1,
+            per_page: 50,
+            organization_locations: ["United Kingdom"],
+            organization_industry_tag_ids: ["venture capital & private equity"],
+            // Also search by keywords
+            q_organization_keyword_tags: ["venture capital", "early stage", "seed funding"],
+          }),
         }
       );
 
       if (!response.ok) {
-        console.error("BVCA fetch failed:", response.status);
-        return vcs;
+        const errorText = await response.text();
+        console.error(`Apollo Organization Search failed (${response.status}):`, errorText);
+        // Fall back to curated list
+        return getUKVCFallbackList();
       }
 
-      const html = await response.text();
+      const data = await response.json();
 
-      // Parse member listings - BVCA uses a specific structure
-      // Look for member cards with firm names and details
-      const memberPattern =
-        /<div[^>]*class="[^"]*member[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-      const namePattern = /<h[2-4][^>]*>(.*?)<\/h[2-4]>/i;
-      const linkPattern = /<a[^>]*href="([^"]*)"[^>]*>/gi;
-      const websitePattern = /https?:\/\/(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/gi;
-
-      let match;
-      while ((match = memberPattern.exec(html)) !== null) {
-        const memberHtml = match[1];
-        const nameMatch = namePattern.exec(memberHtml);
-
-        if (nameMatch) {
-          const firmName = nameMatch[1].replace(/<[^>]*>/g, "").trim();
-
-          // Extract website if present
-          const websiteMatch = websitePattern.exec(memberHtml);
-
-          if (firmName && firmName.length > 2) {
+      if (data.organizations && Array.isArray(data.organizations)) {
+        for (const org of data.organizations) {
+          if (org.name) {
             vcs.push({
-              firmName,
-              website: websiteMatch ? websiteMatch[0] : undefined,
+              firmName: org.name,
+              website: org.website_url || org.primary_domain,
             });
           }
         }
       }
 
-      // Fallback: Try to find any company-like names if pattern matching fails
-      if (vcs.length === 0) {
-        // Look for common VC firm patterns in the HTML
-        const firmPatterns = [
-          /([A-Z][a-zA-Z]+ (?:Capital|Ventures|Partners|Investments|VC))/g,
-          /([A-Z][a-zA-Z]+ [A-Z][a-zA-Z]+ (?:Capital|Ventures|Partners))/g,
-        ];
+      console.log(`Apollo found ${vcs.length} UK VC organizations`);
 
-        for (const pattern of firmPatterns) {
-          let firmMatch;
-          while ((firmMatch = pattern.exec(html)) !== null) {
-            const name = firmMatch[1].trim();
-            if (!vcs.find((v) => v.firmName === name)) {
-              vcs.push({ firmName: name });
-            }
+      // If Apollo didn't return enough, supplement with fallback list
+      if (vcs.length < 10) {
+        const fallbackVCs = getUKVCFallbackList();
+        for (const vc of fallbackVCs) {
+          if (!vcs.find(v => v.firmName.toLowerCase() === vc.firmName.toLowerCase())) {
+            vcs.push(vc);
           }
         }
       }

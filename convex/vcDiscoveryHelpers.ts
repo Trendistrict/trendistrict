@@ -160,6 +160,14 @@ export const getUserSettings = internalQuery({
   },
 });
 
+// Get all user settings (for finding API keys)
+export const getAllUserSettings = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("userSettings").collect();
+  },
+});
+
 // Get recent discovery logs
 export const getRecentDiscoveryLogs = internalQuery({
   args: {
