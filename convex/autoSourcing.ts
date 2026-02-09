@@ -287,7 +287,18 @@ async function searchByIncorporationDate(
   toDate: string,
   sicCode: string
 ): Promise<CompanySearchResult[]> {
-  const url = `${COMPANIES_HOUSE_API}/advanced-search/companies?incorporated_from=${fromDate}&incorporated_to=${toDate}&sic_codes=${sicCode}&size=100&status=active`;
+  // Build URL with proper parameters
+  const params = new URLSearchParams({
+    incorporated_from: fromDate,
+    incorporated_to: toDate,
+    sic_codes: sicCode,
+    size: "100",
+    company_status: "active",
+  });
+
+  const url = `${COMPANIES_HOUSE_API}/advanced-search/companies?${params.toString()}`;
+
+  console.log(`Searching Companies House: SIC ${sicCode}, ${fromDate} to ${toDate}`);
 
   const response = await fetch(url, {
     headers: {
@@ -296,16 +307,26 @@ async function searchByIncorporationDate(
   });
 
   if (!response.ok) {
-    if (response.status === 416) {
+    const errorText = await response.text().catch(() => "");
+    console.error(`Companies House API error ${response.status}: ${errorText}`);
+
+    if (response.status === 416 || response.status === 404) {
       // No results found
       return [];
     }
-    throw new Error(`Companies House API error: ${response.status}`);
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`Companies House API authentication failed. Check your API key.`);
+    }
+    // Continue with empty results for other errors
+    return [];
   }
 
   const data = await response.json();
+  const items = data.items ?? [];
 
-  return (data.items ?? []).map((item: Record<string, unknown>) => ({
+  console.log(`Found ${items.length} companies for SIC ${sicCode}`);
+
+  return items.map((item: Record<string, unknown>) => ({
     companyNumber: item.company_number as string,
     companyName: item.company_name as string,
     companyStatus: item.company_status as string,
