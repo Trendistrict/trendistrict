@@ -46,6 +46,8 @@ export default function SettingsPage() {
   const removeTopUniversity = useMutation(api.settings.removeTopUniversity);
   const seedDefaults = useMutation(api.settings.seedDefaults);
   const runVcDiscovery = useAction(api.vcDiscovery.runVcDiscovery);
+  const testCompaniesHouseApiKey = useAction(api.autoSourcing.testApiKey);
+  const runAutoSourcing = useAction(api.autoSourcing.runAutoSourcing);
 
   const [formData, setFormData] = useState({
     companiesHouseApiKey: "",
@@ -73,6 +75,18 @@ export default function SettingsPage() {
     vcsImported: number;
     vcsFlagged: number;
     vcsSkipped: number;
+  } | null>(null);
+  const [testingCompaniesHouse, setTestingCompaniesHouse] = useState(false);
+  const [companiesHouseTestResult, setCompaniesHouseTestResult] = useState<{
+    success: boolean;
+    message: string;
+    basicSearchWorks: boolean;
+    advancedSearchWorks: boolean;
+  } | null>(null);
+  const [startupDiscoveryRunning, setStartupDiscoveryRunning] = useState(false);
+  const [startupDiscoveryResult, setStartupDiscoveryResult] = useState<{
+    found: number;
+    added: number;
   } | null>(null);
 
   useEffect(() => {
@@ -139,6 +153,66 @@ export default function SettingsPage() {
       country: newUniversity.country || undefined,
     });
     setNewUniversity({ name: "", tier: "tier2", country: "" });
+  };
+
+  const handleTestCompaniesHouse = async () => {
+    if (!formData.companiesHouseApiKey) {
+      alert("Please enter a Companies House API key first");
+      return;
+    }
+
+    setTestingCompaniesHouse(true);
+    setCompaniesHouseTestResult(null);
+
+    try {
+      const result = await testCompaniesHouseApiKey({
+        apiKey: formData.companiesHouseApiKey,
+      });
+      setCompaniesHouseTestResult(result);
+    } catch (error) {
+      console.error("API test failed:", error);
+      setCompaniesHouseTestResult({
+        success: false,
+        message: `Test failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        basicSearchWorks: false,
+        advancedSearchWorks: false,
+      });
+    } finally {
+      setTestingCompaniesHouse(false);
+    }
+  };
+
+  const handleRunStartupDiscovery = async () => {
+    if (!formData.companiesHouseApiKey) {
+      alert("Please configure and save your Companies House API key first");
+      return;
+    }
+
+    setStartupDiscoveryRunning(true);
+    setStartupDiscoveryResult(null);
+
+    try {
+      // Save settings first
+      await upsertSettings({
+        companiesHouseApiKey: formData.companiesHouseApiKey,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const result = await runAutoSourcing({
+        apiKey: formData.companiesHouseApiKey,
+        daysBack: 30,
+      });
+      setStartupDiscoveryResult({
+        found: result.found,
+        added: result.added,
+      });
+    } catch (error) {
+      console.error("Startup discovery failed:", error);
+      alert(`Startup discovery failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setStartupDiscoveryRunning(false);
+    }
   };
 
   const handleRunDiscovery = async () => {
@@ -230,12 +304,87 @@ export default function SettingsPage() {
                   </a>
                 </p>
               </div>
-              {formData.companiesHouseApiKey && (
-                <Badge variant="secondary" className="gap-1">
-                  <IconCheck className="h-3 w-3" />
-                  Configured
-                </Badge>
+              <div className="flex flex-wrap gap-2 items-center">
+                {formData.companiesHouseApiKey && (
+                  <Badge variant="secondary" className="gap-1">
+                    <IconCheck className="h-3 w-3" />
+                    Configured
+                  </Badge>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestCompaniesHouse}
+                  disabled={testingCompaniesHouse || !formData.companiesHouseApiKey}
+                >
+                  {testingCompaniesHouse ? (
+                    <IconLoader2 className="h-4 w-4 animate-spin mr-1" />
+                  ) : (
+                    <IconSearch className="h-4 w-4 mr-1" />
+                  )}
+                  Test API Key
+                </Button>
+              </div>
+
+              {/* Test Results */}
+              {companiesHouseTestResult && (
+                <div className={`mt-3 p-3 rounded-lg text-sm ${
+                  companiesHouseTestResult.success ? "bg-green-500/10 border border-green-500/20" : "bg-red-500/10 border border-red-500/20"
+                }`}>
+                  <p className={companiesHouseTestResult.success ? "text-green-600" : "text-red-600"}>
+                    {companiesHouseTestResult.message}
+                  </p>
+                  <div className="mt-2 flex gap-3 text-xs">
+                    <span className={companiesHouseTestResult.basicSearchWorks ? "text-green-600" : "text-muted-foreground"}>
+                      Basic Search: {companiesHouseTestResult.basicSearchWorks ? "✓" : "✗"}
+                    </span>
+                    <span className={companiesHouseTestResult.advancedSearchWorks ? "text-green-600" : "text-muted-foreground"}>
+                      Advanced Search: {companiesHouseTestResult.advancedSearchWorks ? "✓" : "✗"}
+                    </span>
+                  </div>
+                </div>
               )}
+
+              {/* Run Startup Discovery */}
+              <div className="pt-4 border-t mt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Run Startup Discovery</p>
+                    <p className="text-xs text-muted-foreground">
+                      Find newly incorporated UK tech startups (last 30 days)
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleRunStartupDiscovery}
+                    disabled={startupDiscoveryRunning || !formData.companiesHouseApiKey}
+                    variant="outline"
+                  >
+                    {startupDiscoveryRunning ? (
+                      <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <IconPlayerPlay className="h-4 w-4 mr-2" />
+                    )}
+                    {startupDiscoveryRunning ? "Running..." : "Run Now"}
+                  </Button>
+                </div>
+
+                {/* Startup Discovery Results */}
+                {startupDiscoveryResult && (
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
+                    <p className="text-sm font-medium mb-2">Startup Discovery Results</p>
+                    <div className="grid grid-cols-2 gap-2 text-center text-sm">
+                      <div>
+                        <div className="text-lg font-semibold">{startupDiscoveryResult.found}</div>
+                        <div className="text-xs text-muted-foreground">Found</div>
+                      </div>
+                      <div>
+                        <div className="text-lg font-semibold text-green-600">{startupDiscoveryResult.added}</div>
+                        <div className="text-xs text-muted-foreground">Added</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
 

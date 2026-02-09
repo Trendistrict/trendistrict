@@ -175,6 +175,79 @@ interface Officer {
   occupation?: string;
 }
 
+// Test API key with basic search (not advanced search)
+export const testApiKey = action({
+  args: {
+    apiKey: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    message: string;
+    basicSearchWorks: boolean;
+    advancedSearchWorks: boolean;
+  }> => {
+    const cleanApiKey = args.apiKey.trim();
+    const base64Auth = Buffer.from(`${cleanApiKey}:`).toString("base64");
+
+    // Test 1: Try basic company search (this should work with any REST API key)
+    let basicSearchWorks = false;
+    try {
+      const basicUrl = `${COMPANIES_HOUSE_API}/search/companies?q=test&items_per_page=1`;
+      const basicResponse = await fetch(basicUrl, {
+        method: "GET",
+        headers: {
+          "Authorization": `Basic ${base64Auth}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (basicResponse.ok) {
+        basicSearchWorks = true;
+        console.log("Basic search API works!");
+      } else {
+        const errorText = await basicResponse.text().catch(() => "");
+        console.error(`Basic search failed: ${basicResponse.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error("Basic search error:", error);
+    }
+
+    // Test 2: Try advanced search
+    let advancedSearchWorks = false;
+    try {
+      const advancedUrl = `${COMPANIES_HOUSE_API}/advanced-search/companies?company_status=active&size=1`;
+      const advancedResponse = await fetch(advancedUrl, {
+        method: "GET",
+        headers: {
+          "Authorization": `Basic ${base64Auth}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (advancedResponse.ok) {
+        advancedSearchWorks = true;
+        console.log("Advanced search API works!");
+      } else {
+        const errorText = await advancedResponse.text().catch(() => "");
+        console.error(`Advanced search failed: ${advancedResponse.status} - ${errorText}`);
+      }
+    } catch (error) {
+      console.error("Advanced search error:", error);
+    }
+
+    return {
+      success: basicSearchWorks || advancedSearchWorks,
+      message: basicSearchWorks
+        ? advancedSearchWorks
+          ? "Both basic and advanced search work!"
+          : "Basic search works, but advanced search requires additional access. Using fallback."
+        : "API key authentication failed. Please check your API key.",
+      basicSearchWorks,
+      advancedSearchWorks,
+    };
+  },
+});
+
 // Main auto-sourcing action - finds new tech startups
 export const runAutoSourcing = action({
   args: {
@@ -287,7 +360,28 @@ async function searchByIncorporationDate(
   toDate: string,
   sicCode: string
 ): Promise<CompanySearchResult[]> {
-  // Build URL with proper parameters
+  // Clean the API key (remove any whitespace)
+  const cleanApiKey = apiKey.trim();
+  const base64Auth = Buffer.from(`${cleanApiKey}:`).toString("base64");
+
+  // First try advanced search
+  const advancedResult = await tryAdvancedSearch(base64Auth, fromDate, toDate, sicCode);
+  if (advancedResult !== null) {
+    return advancedResult;
+  }
+
+  // Fallback to basic search if advanced search is not available
+  console.log("Advanced search not available, using basic search fallback...");
+  return await tryBasicSearchFallback(base64Auth, sicCode, fromDate, toDate);
+}
+
+// Try advanced search (requires premium API access)
+async function tryAdvancedSearch(
+  base64Auth: string,
+  fromDate: string,
+  toDate: string,
+  sicCode: string
+): Promise<CompanySearchResult[] | null> {
   const params = new URLSearchParams({
     incorporated_from: fromDate,
     incorporated_to: toDate,
@@ -297,44 +391,151 @@ async function searchByIncorporationDate(
   });
 
   const url = `${COMPANIES_HOUSE_API}/advanced-search/companies?${params.toString()}`;
+  console.log(`Trying advanced search: SIC ${sicCode}, ${fromDate} to ${toDate}`);
 
-  console.log(`Searching Companies House: SIC ${sicCode}, ${fromDate} to ${toDate}`);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Authorization": `Basic ${base64Auth}`,
+        "Accept": "application/json",
+      },
+    });
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
-    },
-  });
+    if (response.ok) {
+      const data = await response.json();
+      const items = data.items ?? [];
+      console.log(`Advanced search found ${items.length} companies`);
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    console.error(`Companies House API error ${response.status}: ${errorText}`);
+      return items.map((item: Record<string, unknown>) => ({
+        companyNumber: item.company_number as string,
+        companyName: item.company_name as string,
+        companyStatus: item.company_status as string,
+        companyType: item.company_type as string,
+        incorporationDate: item.date_of_creation as string,
+        registeredAddress: formatAddress(item.registered_office_address as Record<string, unknown>),
+        sicCodes: item.sic_codes as string[],
+      }));
+    }
 
-    if (response.status === 416 || response.status === 404) {
-      // No results found
+    // If 400/401/403, advanced search is not available
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      const errorText = await response.text().catch(() => "");
+      console.log(`Advanced search not available (${response.status}): ${errorText}`);
+      return null; // Signal to use fallback
+    }
+
+    // For 404/416, no results found
+    if (response.status === 404 || response.status === 416) {
       return [];
     }
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(`Companies House API authentication failed. Check your API key.`);
+
+    console.error(`Advanced search unexpected error: ${response.status}`);
+    return null;
+  } catch (error) {
+    console.error("Advanced search error:", error);
+    return null;
+  }
+}
+
+// Fallback: Use basic search API and get company profiles
+async function tryBasicSearchFallback(
+  base64Auth: string,
+  sicCode: string,
+  fromDate: string,
+  toDate: string
+): Promise<CompanySearchResult[]> {
+  // Map SIC code to search terms
+  const sicToSearch: Record<string, string[]> = {
+    "62011": ["software", "tech startup", "saas"],
+    "62012": ["business software", "enterprise software"],
+    "62020": ["IT consulting", "technology consulting"],
+    "62030": ["computer facilities", "hosting"],
+    "62090": ["IT services", "technology services"],
+    "63110": ["data processing", "data center"],
+    "63120": ["web portal", "online platform"],
+    "64209": ["fintech", "financial technology"],
+    "72190": ["research", "R&D", "science"],
+    "72200": ["research development", "innovation"],
+  };
+
+  const searchTerms = sicToSearch[sicCode] ?? ["technology startup UK"];
+  const companies: CompanySearchResult[] = [];
+  const fromDateObj = new Date(fromDate);
+  const toDateObj = new Date(toDate);
+
+  for (const term of searchTerms.slice(0, 1)) { // Limit to 1 search per SIC code to avoid rate limits
+    try {
+      const url = `${COMPANIES_HOUSE_API}/search/companies?q=${encodeURIComponent(term)}&items_per_page=50`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": `Basic ${base64Auth}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`Basic search failed for "${term}": ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const items = data.items ?? [];
+
+      // Filter by incorporation date
+      for (const item of items) {
+        const incDate = item.date_of_creation ? new Date(item.date_of_creation) : null;
+        if (incDate && incDate >= fromDateObj && incDate <= toDateObj) {
+          // Get full company profile to get SIC codes
+          const profile = await getCompanyProfile(base64Auth, item.company_number);
+          if (profile && profile.sicCodes?.includes(sicCode)) {
+            companies.push(profile);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Basic search error for "${term}":`, error);
     }
-    // Continue with empty results for other errors
-    return [];
   }
 
-  const data = await response.json();
-  const items = data.items ?? [];
+  console.log(`Basic search fallback found ${companies.length} companies for SIC ${sicCode}`);
+  return companies;
+}
 
-  console.log(`Found ${items.length} companies for SIC ${sicCode}`);
+// Get company profile for detailed info including SIC codes
+async function getCompanyProfile(
+  base64Auth: string,
+  companyNumber: string
+): Promise<CompanySearchResult | null> {
+  try {
+    const url = `${COMPANIES_HOUSE_API}/company/${companyNumber}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Authorization": `Basic ${base64Auth}`,
+        "Accept": "application/json",
+      },
+    });
 
-  return items.map((item: Record<string, unknown>) => ({
-    companyNumber: item.company_number as string,
-    companyName: item.company_name as string,
-    companyStatus: item.company_status as string,
-    companyType: item.company_type as string,
-    incorporationDate: item.date_of_creation as string,
-    registeredAddress: formatAddress(item.registered_office_address as Record<string, unknown>),
-    sicCodes: item.sic_codes as string[],
-  }));
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return {
+      companyNumber: data.company_number,
+      companyName: data.company_name,
+      companyStatus: data.company_status,
+      companyType: data.type,
+      incorporationDate: data.date_of_creation,
+      registeredAddress: formatAddress(data.registered_office_address),
+      sicCodes: data.sic_codes,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Get company officers
@@ -342,15 +543,20 @@ async function getCompanyOfficers(
   apiKey: string,
   companyNumber: string
 ): Promise<Officer[]> {
+  const cleanApiKey = apiKey.trim();
   const url = `${COMPANIES_HOUSE_API}/company/${companyNumber}/officers`;
+  const base64Auth = Buffer.from(`${cleanApiKey}:`).toString("base64");
 
   const response = await fetch(url, {
+    method: "GET",
     headers: {
-      Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+      "Authorization": `Basic ${base64Auth}`,
+      "Accept": "application/json",
     },
   });
 
   if (!response.ok) {
+    console.error(`Failed to get officers for ${companyNumber}: ${response.status}`);
     return [];
   }
 
