@@ -48,6 +48,7 @@ export default function SettingsPage() {
   const runVcDiscovery = useAction(api.vcDiscovery.runVcDiscovery);
   const testCompaniesHouseApiKey = useAction(api.autoSourcing.testApiKey);
   const runAutoSourcing = useAction(api.autoSourcing.runAutoSourcing);
+  const runFullPipeline = useAction(api.startupQualification.runFullPipeline);
 
   const [formData, setFormData] = useState({
     companiesHouseApiKey: "",
@@ -87,6 +88,12 @@ export default function SettingsPage() {
   const [startupDiscoveryResult, setStartupDiscoveryResult] = useState<{
     found: number;
     added: number;
+  } | null>(null);
+  const [fullPipelineRunning, setFullPipelineRunning] = useState(false);
+  const [fullPipelineResult, setFullPipelineResult] = useState<{
+    discovery: { found: number; added: number };
+    enrichment: { processed: number; enriched: number };
+    qualification: { processed: number; qualified: number; watchlist: number };
   } | null>(null);
 
   useEffect(() => {
@@ -212,6 +219,38 @@ export default function SettingsPage() {
       alert(`Startup discovery failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setStartupDiscoveryRunning(false);
+    }
+  };
+
+  const handleRunFullPipeline = async () => {
+    if (!formData.companiesHouseApiKey) {
+      alert("Please configure and save your Companies House API key first");
+      return;
+    }
+
+    setFullPipelineRunning(true);
+    setFullPipelineResult(null);
+
+    try {
+      // Save settings first
+      await upsertSettings({
+        companiesHouseApiKey: formData.companiesHouseApiKey,
+        exaApiKey: formData.exaApiKey || undefined,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const result = await runFullPipeline({
+        companiesHouseApiKey: formData.companiesHouseApiKey,
+        exaApiKey: formData.exaApiKey || undefined,
+        daysBack: 30,
+      });
+      setFullPipelineResult(result);
+    } catch (error) {
+      console.error("Full pipeline failed:", error);
+      alert(`Full pipeline failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setFullPipelineRunning(false);
     }
   };
 
@@ -384,6 +423,54 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Full Pipeline */}
+                <div className="pt-4 border-t mt-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Run Full Pipeline</p>
+                      <p className="text-xs text-muted-foreground">
+                        Discover → Enrich → Qualify startups automatically
+                      </p>
+                    </div>
+                    <Button
+                      onClick={handleRunFullPipeline}
+                      disabled={fullPipelineRunning || !formData.companiesHouseApiKey}
+                      variant="default"
+                    >
+                      {fullPipelineRunning ? (
+                        <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <IconSparkles className="h-4 w-4 mr-2" />
+                      )}
+                      {fullPipelineRunning ? "Running Pipeline..." : "Run Full Pipeline"}
+                    </Button>
+                  </div>
+
+                  {/* Full Pipeline Results */}
+                  {fullPipelineResult && (
+                    <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                      <p className="text-sm font-medium mb-3 text-green-600">Pipeline Complete</p>
+                      <div className="grid grid-cols-3 gap-4 text-center text-sm">
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Discovery</div>
+                          <div className="text-lg font-semibold">{fullPipelineResult.discovery.added}</div>
+                          <div className="text-xs text-muted-foreground">startups added</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Enrichment</div>
+                          <div className="text-lg font-semibold">{fullPipelineResult.enrichment.enriched}</div>
+                          <div className="text-xs text-muted-foreground">founders enriched</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Qualification</div>
+                          <div className="text-lg font-semibold text-green-600">{fullPipelineResult.qualification.qualified}</div>
+                          <div className="text-xs text-muted-foreground">qualified</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>

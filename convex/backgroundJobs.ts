@@ -387,6 +387,14 @@ async function runEnrichmentBatch(
     });
   }
 
+  // After enrichment, run qualification on the enriched startups
+  try {
+    const qualResult = await ctx.runAction(internal.startupQualification.qualifyAllPending, {});
+    console.log(`Post-enrichment qualification: ${qualResult.qualified} qualified, ${qualResult.passed} passed`);
+  } catch (error) {
+    console.error("Post-enrichment qualification failed:", error);
+  }
+
   return { startupsProcessed, foundersEnriched };
 }
 
