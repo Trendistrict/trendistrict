@@ -120,14 +120,18 @@ function calculateStartupScore(
     .map(f => f.overallScore!);
 
   let teamScore = 0;
-  if (founderScores.length > 0) {
+  let foundersEnriched = founderScores.length > 0;
+
+  if (foundersEnriched) {
     teamScore = Math.round(
       founderScores.reduce((a, b) => a + b, 0) / founderScores.length
     );
     reasoning.push(`Team score: ${teamScore} (${founderScores.length} founders scored)`);
   } else {
-    teamScore = 30; // Default for unscored founders
-    reasoning.push("Team score: 30 (founders not yet scored)");
+    // When founders aren't enriched, use a neutral score (50)
+    // so qualification proceeds based primarily on market
+    teamScore = 50;
+    reasoning.push("Team score: 50 (pending LinkedIn enrichment - using neutral)");
   }
 
   // 2. Calculate market score
@@ -151,10 +155,21 @@ function calculateStartupScore(
   }
 
   // 4. Calculate overall score (weighted)
-  // Team: 50%, Market: 40%, Bonus: 10%
-  const overallScore = Math.min(100, Math.round(
-    teamScore * 0.5 + marketScore * 0.4 + bonusScore
-  ));
+  // When founders aren't enriched, rely more on market score
+  let overallScore: number;
+  if (foundersEnriched) {
+    // Normal weighting: Team: 50%, Market: 40%, Bonus: 10%
+    overallScore = Math.min(100, Math.round(
+      teamScore * 0.5 + marketScore * 0.4 + bonusScore
+    ));
+  } else {
+    // Without founder data: Team: 30%, Market: 60%, Bonus: 10%
+    // This allows good market sectors to qualify even without founder enrichment
+    overallScore = Math.min(100, Math.round(
+      teamScore * 0.3 + marketScore * 0.6 + bonusScore
+    ));
+    reasoning.push("Using market-weighted scoring (founders pending enrichment)");
+  }
 
   // 5. Determine tier and qualification status
   let tier: "A" | "B" | "C" | "D";
@@ -170,19 +185,17 @@ function calculateStartupScore(
     reasoning.push("Tier B: Qualified for outreach");
   } else if (overallScore >= QUALITY_THRESHOLDS.TIER_C_MINIMUM) {
     tier = "C";
+    // If founders aren't enriched but market is okay, mark as watchlist (allows progression)
     qualificationStatus = "watchlist";
-    reasoning.push("Tier C: Watchlist - needs more research");
+    reasoning.push("Tier C: Watchlist - consider LinkedIn enrichment for better scoring");
   } else {
     tier = "D";
     qualificationStatus = "passed";
     reasoning.push("Tier D: Does not meet minimum criteria");
   }
 
-  // Override: if team score is too low, require more research
-  if (teamScore < QUALITY_THRESHOLDS.MINIMUM_TEAM_SCORE && founderScores.length === 0) {
-    qualificationStatus = "needs_research";
-    reasoning.push("Founders need LinkedIn enrichment for proper scoring");
-  }
+  // Note: We no longer block qualification for unenriched founders
+  // Instead, we use market-weighted scoring and add enrichment as a nice-to-have
 
   return {
     overallScore,
@@ -224,9 +237,15 @@ export const qualifyStartup = internalAction({
     let newStage = startup.stage;
     if (result.qualificationStatus === "qualified") {
       newStage = "qualified";
+    } else if (result.qualificationStatus === "watchlist") {
+      // Watchlist startups are also qualified, just lower priority (Tier C)
+      // They can still receive outreach, just not as high priority
+      newStage = "qualified";
     } else if (result.qualificationStatus === "passed") {
       newStage = "passed";
     } else if (result.qualificationStatus === "needs_research") {
+      // Only keep in researching if explicitly needs more data
+      // With our new scoring, this should rarely happen
       newStage = "researching";
     }
 

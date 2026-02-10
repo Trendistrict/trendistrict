@@ -27,15 +27,25 @@ export const getStartupsPendingQualification = internalQuery({
     limit: v.number(),
   },
   handler: async (ctx, args) => {
-    // Get startups in "researching" stage (founders enriched, ready for qualification)
-    const startups = await ctx.db
+    // Get startups in both "discovered" and "researching" stages
+    // We can qualify startups even without LinkedIn enrichment (market-weighted scoring)
+    const discoveredStartups = await ctx.db
+      .query("startups")
+      .withIndex("by_user_and_stage", (q) =>
+        q.eq("userId", args.userId).eq("stage", "discovered")
+      )
+      .take(args.limit);
+
+    const researchingStartups = await ctx.db
       .query("startups")
       .withIndex("by_user_and_stage", (q) =>
         q.eq("userId", args.userId).eq("stage", "researching")
       )
       .take(args.limit);
 
-    return startups;
+    // Combine and limit
+    const combined = [...discoveredStartups, ...researchingStartups];
+    return combined.slice(0, args.limit);
   },
 });
 
