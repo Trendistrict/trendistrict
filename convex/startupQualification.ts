@@ -279,9 +279,10 @@ export const qualifyAllPending = internalAction({
     const identity = await ctx.auth.getUserIdentity();
     const userId = args.userId ?? identity?.subject ?? DEFAULT_USER_ID;
 
+    // Process up to 200 startups per qualification run (increased from 50)
     const startups = await ctx.runQuery(
       internal.startupQualificationQueries.getStartupsPendingQualification,
-      { userId, limit: 50 }
+      { userId, limit: 200 }
     );
 
     const results = {
@@ -402,6 +403,122 @@ export const runManualQualification = action({
       qualified: result.qualified,
       watchlist: result.watchlist,
       passed: result.passed,
+    };
+  },
+});
+
+// Continuous pipeline: Keep processing until all startups are qualified
+// This handles cases where there are more than 200 startups pending
+export const runContinuousPipeline = action({
+  args: {
+    companiesHouseApiKey: v.string(),
+    exaApiKey: v.optional(v.string()),
+    daysBack: v.optional(v.number()),
+    maxIterations: v.optional(v.number()), // Safety limit, defaults to 10
+  },
+  handler: async (ctx, args): Promise<{
+    totalDiscovered: number;
+    totalAdded: number;
+    totalQualified: number;
+    totalWatchlist: number;
+    totalPassed: number;
+    iterations: number;
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    const userId = identity?.subject ?? DEFAULT_USER_ID;
+    const maxIterations = args.maxIterations ?? 10;
+
+    let totalDiscovered = 0;
+    let totalAdded = 0;
+    let totalQualified = 0;
+    let totalWatchlist = 0;
+    let totalPassed = 0;
+    let iterations = 0;
+
+    // Step 1: Discovery (run once with expanded date range for more results)
+    console.log("=== CONTINUOUS PIPELINE START ===");
+    console.log("Step 1: Running startup discovery...");
+
+    const discoveryResult = await ctx.runAction(api.autoSourcing.runAutoSourcing, {
+      apiKey: args.companiesHouseApiKey,
+      daysBack: args.daysBack ?? 90, // Larger window for more companies
+    });
+
+    totalDiscovered = discoveryResult.found;
+    totalAdded = discoveryResult.added;
+    console.log(`Discovery complete: Found ${totalDiscovered}, Added ${totalAdded}`);
+
+    // Step 2: Optional enrichment (if Exa API key provided)
+    if (args.exaApiKey) {
+      console.log("Step 2: Enriching with LinkedIn data...");
+      try {
+        const enrichResult = await ctx.runAction(api.autoSourcing.enrichDiscoveredStartups, {
+          exaApiKey: args.exaApiKey,
+          limit: 50,
+        });
+        console.log(`Enriched ${enrichResult.foundersEnriched} founders`);
+      } catch (error) {
+        console.error("Enrichment error (continuing without):", error);
+      }
+    }
+
+    // Step 3: Continuous qualification until all are processed
+    console.log("Step 3: Running continuous qualification...");
+
+    let hasMore = true;
+    while (hasMore && iterations < maxIterations) {
+      iterations++;
+      console.log(`Qualification iteration ${iterations}...`);
+
+      const qualResult = await ctx.runAction(internal.startupQualification.qualifyAllPending, { userId });
+
+      totalQualified += qualResult.qualified;
+      totalWatchlist += qualResult.watchlist;
+      totalPassed += qualResult.passed;
+
+      console.log(`Iteration ${iterations}: Processed ${qualResult.processed} (${qualResult.qualified} qualified, ${qualResult.watchlist} watchlist, ${qualResult.passed} passed)`);
+
+      // Stop if we processed fewer than the batch size (200) - means we've caught up
+      hasMore = qualResult.processed >= 200;
+    }
+
+    console.log("=== CONTINUOUS PIPELINE COMPLETE ===");
+    console.log(`Total: ${totalQualified} qualified, ${totalWatchlist} watchlist, ${totalPassed} passed`);
+
+    return {
+      totalDiscovered,
+      totalAdded,
+      totalQualified,
+      totalWatchlist,
+      totalPassed,
+      iterations,
+    };
+  },
+});
+
+// Process ALL pending startups in background (schedules itself if more work remains)
+export const processAllPending = action({
+  args: {},
+  handler: async (ctx): Promise<{
+    batchProcessed: number;
+    qualified: number;
+    watchlist: number;
+    passed: number;
+    hasMore: boolean;
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    const userId = identity?.subject ?? DEFAULT_USER_ID;
+
+    const result = await ctx.runAction(internal.startupQualification.qualifyAllPending, { userId });
+
+    const hasMore = result.processed >= 200;
+
+    return {
+      batchProcessed: result.processed,
+      qualified: result.qualified,
+      watchlist: result.watchlist,
+      passed: result.passed,
+      hasMore,
     };
   },
 });

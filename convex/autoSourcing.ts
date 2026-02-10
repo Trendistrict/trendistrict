@@ -315,7 +315,9 @@ export const runAutoSourcing = action({
     // Add companies to database
     const addedCompanies: Array<{ name: string; number: string; incorporated: string }> = [];
 
-    for (const company of filteredCompanies.slice(0, 50)) { // Limit to 50 per run
+    // Process up to 200 companies per run (increased from 50)
+    const maxToProcess = 200;
+    for (const company of filteredCompanies.slice(0, maxToProcess)) {
       try {
         // Get officers (founders/directors)
         const officers = await getCompanyOfficers(args.apiKey, company.companyNumber);
