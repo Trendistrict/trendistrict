@@ -1,5 +1,75 @@
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getUserId } from "./authHelpers";
+
+// ============ PUBLIC QUERIES FOR JOB STATUS ============
+
+// Get recent job runs for the current user
+export const getRecentJobs = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getUserId(ctx);
+    const limit = args.limit ?? 10;
+
+    const jobs = await ctx.db
+      .query("jobRuns")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(limit);
+
+    return jobs;
+  },
+});
+
+// Get pipeline status summary
+export const getPipelineStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getUserId(ctx);
+
+    // Check for running jobs
+    const runningJobs = await ctx.db
+      .query("jobRuns")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .filter((q) => q.eq(q.field("status"), "running"))
+      .collect();
+
+    // Get latest completed job of each type
+    const allJobs = await ctx.db
+      .query("jobRuns")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(100);
+
+    const latestByType: Record<string, typeof allJobs[0]> = {};
+    for (const job of allJobs) {
+      if (!latestByType[job.jobType] && job.status === "completed") {
+        latestByType[job.jobType] = job;
+      }
+    }
+
+    // Get settings to check API key configuration
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+
+    return {
+      isRunning: runningJobs.length > 0,
+      runningJobs: runningJobs.map(j => j.jobType),
+      latestDiscovery: latestByType["discovery"],
+      latestEnrichment: latestByType["enrichment"],
+      apiKeysConfigured: {
+        companiesHouse: !!settings?.companiesHouseApiKey,
+        exa: !!settings?.exaApiKey,
+        email: !!settings?.emailApiKey,
+        apollo: !!settings?.apolloApiKey,
+      },
+    };
+  },
+});
 
 // ============ HELPER QUERIES/MUTATIONS FOR BACKGROUND JOBS ============
 // These are separated from backgroundJobs.ts because that file uses "use node"

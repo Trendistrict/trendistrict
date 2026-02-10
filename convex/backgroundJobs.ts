@@ -398,6 +398,33 @@ async function runEnrichmentBatch(
   return { startupsProcessed, foundersEnriched };
 }
 
+// ============ SCHEDULED QUALIFICATION ============
+
+export const runScheduledQualification = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      try {
+        console.log(`Running qualification for user ${settings.userId}...`);
+
+        const result = await ctx.runAction(internal.startupQualification.qualifyAllPending, {
+          userId: settings.userId,
+        });
+
+        console.log(
+          `Qualification completed for user ${settings.userId}: ` +
+          `${result.processed} processed, ${result.qualified} qualified, ` +
+          `${result.passed} passed, ${result.needsResearch} needs research`
+        );
+      } catch (error) {
+        console.error(`Qualification failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
 // ============ OUTREACH QUEUE PROCESSING ============
 
 export const processOutreachQueue = internalAction({

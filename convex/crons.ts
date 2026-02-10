@@ -18,6 +18,13 @@ crons.interval(
   internal.backgroundJobs.runScheduledEnrichment
 );
 
+// Run qualification every 3 hours to score enriched startups
+crons.interval(
+  "auto-qualification",
+  { hours: 3 },
+  internal.backgroundJobs.runScheduledQualification
+);
+
 // Process outreach queue every 30 minutes
 // Sends one email at a time to avoid spam filters
 crons.interval(

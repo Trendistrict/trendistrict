@@ -38,6 +38,8 @@ export default function SettingsPage() {
   const settings = useQuery(api.settings.get);
   const highGrowthCompanies = useQuery(api.settings.listHighGrowthCompanies);
   const topUniversities = useQuery(api.settings.listTopUniversities);
+  const pipelineStatus = useQuery(api.backgroundJobsDb.getPipelineStatus);
+  const pipelineStats = useQuery(api.startupQualificationQueries.getPipelineStats);
 
   const upsertSettings = useMutation(api.settings.upsert);
   const addHighGrowthCompany = useMutation(api.settings.addHighGrowthCompany);
@@ -308,6 +310,79 @@ export default function SettingsPage() {
 
         {/* API Keys Tab */}
         <TabsContent value="api" className="space-y-6">
+          {/* Pipeline Status Card */}
+          <Card className="border-2 border-primary/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconSparkles className="h-5 w-5 text-primary" />
+                Pipeline Status
+                {pipelineStatus?.isRunning && (
+                  <Badge variant="secondary" className="ml-2 gap-1">
+                    <IconLoader2 className="h-3 w-3 animate-spin" />
+                    Running
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription>
+                Automatic startup discovery, enrichment, and qualification
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold">{pipelineStats?.discovered ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Discovered</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold">{pipelineStats?.researching ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Researching</div>
+                </div>
+                <div className="text-center p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                  <div className="text-2xl font-bold text-green-600">{pipelineStats?.qualified ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Qualified</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold">{pipelineStats?.contacted ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Contacted</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold text-muted-foreground">{pipelineStats?.passed ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Passed</div>
+                </div>
+              </div>
+
+              {/* Tier Breakdown */}
+              {pipelineStats && pipelineStats.qualified > 0 && (
+                <div className="flex gap-4 text-sm border-t pt-3">
+                  <span className="text-muted-foreground">Qualified by Tier:</span>
+                  <span className="font-medium text-green-600">Tier A: {pipelineStats.tiers.A}</span>
+                  <span className="font-medium text-blue-600">Tier B: {pipelineStats.tiers.B}</span>
+                  <span className="font-medium text-yellow-600">Tier C: {pipelineStats.tiers.C}</span>
+                </div>
+              )}
+
+              {/* API Keys Status */}
+              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
+                <span className="text-xs text-muted-foreground">API Keys:</span>
+                {pipelineStatus?.apiKeysConfigured?.companiesHouse ? (
+                  <Badge variant="secondary" className="text-xs">Companies House <IconCheck className="h-3 w-3 ml-1" /></Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">Companies House <IconX className="h-3 w-3 ml-1" /></Badge>
+                )}
+                {pipelineStatus?.apiKeysConfigured?.exa ? (
+                  <Badge variant="secondary" className="text-xs">Exa.ai <IconCheck className="h-3 w-3 ml-1" /></Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">Exa.ai <IconX className="h-3 w-3 ml-1" /></Badge>
+                )}
+                {pipelineStatus?.apiKeysConfigured?.apollo ? (
+                  <Badge variant="secondary" className="text-xs">Apollo <IconCheck className="h-3 w-3 ml-1" /></Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">Apollo <IconX className="h-3 w-3 ml-1" /></Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
