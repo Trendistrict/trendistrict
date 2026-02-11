@@ -106,6 +106,7 @@ export default function SettingsPage() {
     totalWatchlist: number;
     totalPassed: number;
     iterations: number;
+    timedOut?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -644,6 +645,11 @@ export default function SettingsPage() {
                         <div className="mt-2 text-xs text-muted-foreground text-center">
                           {continuousPipelineResult.totalPassed} passed (did not meet criteria)
                         </div>
+                        {continuousPipelineResult.timedOut && (
+                          <div className="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-600 text-center">
+                            Pipeline timed out - run again to continue processing remaining startups
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
