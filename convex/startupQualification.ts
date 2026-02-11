@@ -68,9 +68,12 @@ function calculateMarketScore(sicCodes: string[] | undefined): {
   score: number;
   category: string;
   reasoning: string;
+  hasData: boolean; // Indicates if we have actual market data
 } {
   if (!sicCodes || sicCodes.length === 0) {
-    return { score: 50, category: "Unknown", reasoning: "No SIC codes available" };
+    // No SIC codes = unknown market, give benefit of doubt (55 instead of 50)
+    // This ensures startups with incomplete data don't auto-fail
+    return { score: 55, category: "Unknown", reasoning: "No SIC codes available - benefit of doubt", hasData: false };
   }
 
   let bestScore = 0;
@@ -85,13 +88,15 @@ function calculateMarketScore(sicCodes: string[] | undefined): {
   }
 
   if (bestScore === 0) {
-    return { score: 40, category: "Traditional", reasoning: "Non-tech SIC codes" };
+    // Has SIC codes but none are tech-related - this is a data-backed low score
+    return { score: 40, category: "Traditional", reasoning: "Non-tech SIC codes", hasData: true };
   }
 
   return {
     score: bestScore,
     category: bestCategory,
     reasoning: `High-value sector: ${bestCategory}`,
+    hasData: true,
   };
 }
 
@@ -169,6 +174,14 @@ function calculateStartupScore(
       teamScore * 0.3 + marketScore * 0.6 + bonusScore
     ));
     reasoning.push("Using market-weighted scoring (founders pending enrichment)");
+
+    // Floor for incomplete data: If we have neither enriched founders NOR market data,
+    // ensure minimum score of 50 (Tier C/watchlist) instead of auto-rejection.
+    // Only reject if we have data showing the startup is in a non-tech sector.
+    if (!marketResult.hasData && overallScore < 50) {
+      overallScore = 50;
+      reasoning.push("Incomplete data floor applied (50) - pending enrichment");
+    }
   }
 
   // 5. Determine tier and qualification status
@@ -255,6 +268,7 @@ export const qualifyStartup = internalAction({
       overallScore: result.overallScore,
       teamScore: result.teamScore,
       marketScore: result.marketScore,
+      bonusScore: result.bonusScore, // For auditability
       stage: newStage,
       notes: `Qualification: ${result.reasoning.join("; ")}`,
     });
@@ -409,6 +423,7 @@ export const runManualQualification = action({
 
 // Continuous pipeline: Keep processing until all startups are qualified
 // This handles cases where there are more than 200 startups pending
+// Has built-in timeout protection to avoid Convex action timeout (10 min limit)
 export const runContinuousPipeline = action({
   args: {
     companiesHouseApiKey: v.string(),
@@ -423,10 +438,15 @@ export const runContinuousPipeline = action({
     totalWatchlist: number;
     totalPassed: number;
     iterations: number;
+    timedOut: boolean;
   }> => {
     const identity = await ctx.auth.getUserIdentity();
     const userId = identity?.subject ?? DEFAULT_USER_ID;
     const maxIterations = args.maxIterations ?? 10;
+
+    // Timeout protection: Convex actions have 10 min limit, stop at 8 min to be safe
+    const startTime = Date.now();
+    const MAX_RUNTIME_MS = 8 * 60 * 1000; // 8 minutes
 
     let totalDiscovered = 0;
     let totalAdded = 0;
@@ -434,6 +454,7 @@ export const runContinuousPipeline = action({
     let totalWatchlist = 0;
     let totalPassed = 0;
     let iterations = 0;
+    let timedOut = false;
 
     // Step 1: Discovery (run once with expanded date range for more results)
     console.log("=== CONTINUOUS PIPELINE START ===");
@@ -447,6 +468,12 @@ export const runContinuousPipeline = action({
     totalDiscovered = discoveryResult.found;
     totalAdded = discoveryResult.added;
     console.log(`Discovery complete: Found ${totalDiscovered}, Added ${totalAdded}`);
+
+    // Check timeout after discovery
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      console.log("Timeout approaching after discovery, stopping early");
+      return { totalDiscovered, totalAdded, totalQualified: 0, totalWatchlist: 0, totalPassed: 0, iterations: 0, timedOut: true };
+    }
 
     // Step 2: Optional enrichment (if Exa API key provided)
     if (args.exaApiKey) {
@@ -462,13 +489,27 @@ export const runContinuousPipeline = action({
       }
     }
 
+    // Check timeout after enrichment
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      console.log("Timeout approaching after enrichment, stopping early");
+      return { totalDiscovered, totalAdded, totalQualified: 0, totalWatchlist: 0, totalPassed: 0, iterations: 0, timedOut: true };
+    }
+
     // Step 3: Continuous qualification until all are processed
     console.log("Step 3: Running continuous qualification...");
 
     let hasMore = true;
     while (hasMore && iterations < maxIterations) {
+      // Check timeout before each iteration
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_RUNTIME_MS) {
+        console.log(`Timeout approaching after ${Math.round(elapsed / 1000)}s, stopping at iteration ${iterations}`);
+        timedOut = true;
+        break;
+      }
+
       iterations++;
-      console.log(`Qualification iteration ${iterations}...`);
+      console.log(`Qualification iteration ${iterations}... (${Math.round(elapsed / 1000)}s elapsed)`);
 
       const qualResult = await ctx.runAction(internal.startupQualification.qualifyAllPending, { userId });
 
@@ -482,8 +523,12 @@ export const runContinuousPipeline = action({
       hasMore = qualResult.processed >= 200;
     }
 
-    console.log("=== CONTINUOUS PIPELINE COMPLETE ===");
+    const totalElapsed = Math.round((Date.now() - startTime) / 1000);
+    console.log(`=== CONTINUOUS PIPELINE COMPLETE in ${totalElapsed}s ===`);
     console.log(`Total: ${totalQualified} qualified, ${totalWatchlist} watchlist, ${totalPassed} passed`);
+    if (timedOut) {
+      console.log("Pipeline timed out - run again to continue processing");
+    }
 
     return {
       totalDiscovered,
@@ -492,6 +537,7 @@ export const runContinuousPipeline = action({
       totalWatchlist,
       totalPassed,
       iterations,
+      timedOut,
     };
   },
 });

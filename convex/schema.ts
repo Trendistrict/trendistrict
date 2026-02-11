@@ -38,6 +38,7 @@ export default defineSchema({
     overallScore: v.optional(v.number()), // 0-100
     teamScore: v.optional(v.number()),
     marketScore: v.optional(v.number()),
+    bonusScore: v.optional(v.number()), // For auditability - stealth, recently announced, multiple founders
     tractionScore: v.optional(v.number()),
   })
     .index("by_user", ["userId"])

@@ -78,6 +78,7 @@ const QUALITY_THRESHOLDS = {
 };
 
 // Public query to get qualified startups for the UI
+// Optimized: Batch loads all founders to avoid N+1 query problem
 export const listQualifiedStartups = query({
   args: {
     minScore: v.optional(v.number()),
@@ -96,16 +97,30 @@ export const listQualifiedStartups = query({
       .order("desc")
       .take(limit);
 
-    // Filter by score and get founders
-    const results = [];
-    for (const startup of startups) {
-      if ((startup.overallScore ?? 0) < minScore) continue;
+    // Filter by score first
+    const filteredStartups = startups.filter(s => (s.overallScore ?? 0) >= minScore);
 
-      const founders = await ctx.db
-        .query("founders")
-        .filter((q) => q.eq(q.field("startupId"), startup._id))
-        .collect();
+    // Batch load all founders for these startups (avoids N+1 query)
+    const startupIds = new Set(filteredStartups.map(s => s._id));
+    const allFounders = await ctx.db
+      .query("founders")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
 
+    // Group founders by startupId
+    const foundersByStartup = new Map<string, typeof allFounders>();
+    for (const founder of allFounders) {
+      if (founder.startupId && startupIds.has(founder.startupId)) {
+        const key = founder.startupId;
+        if (!foundersByStartup.has(key)) {
+          foundersByStartup.set(key, []);
+        }
+        foundersByStartup.get(key)!.push(founder);
+      }
+    }
+
+    // Build results
+    const results = filteredStartups.map(startup => {
       // Determine tier based on score
       const score = startup.overallScore ?? 0;
       let tier: "A" | "B" | "C" | "D" = "D";
@@ -113,7 +128,9 @@ export const listQualifiedStartups = query({
       else if (score >= QUALITY_THRESHOLDS.TIER_B_MINIMUM) tier = "B";
       else if (score >= QUALITY_THRESHOLDS.TIER_C_MINIMUM) tier = "C";
 
-      results.push({
+      const founders = foundersByStartup.get(startup._id) ?? [];
+
+      return {
         ...startup,
         tier,
         founders: founders.map(f => ({
@@ -125,8 +142,8 @@ export const listQualifiedStartups = query({
           role: f.role,
           email: f.email,
         })),
-      });
-    }
+      };
+    });
 
     // Sort by score descending
     return results.sort((a, b) => (b.overallScore ?? 0) - (a.overallScore ?? 0));
