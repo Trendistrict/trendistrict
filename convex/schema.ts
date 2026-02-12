@@ -459,4 +459,94 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_run_id", ["runId"])
     .index("by_status", ["status"]),
+
+  // Market Sectors - tracks emerging sectors and funding trends
+  marketSectors: defineTable({
+    // Sector identification
+    sectorId: v.string(), // Unique ID like "ai-ml", "fintech", "healthtech"
+    name: v.string(), // Display name
+    description: v.optional(v.string()),
+    parentSector: v.optional(v.string()), // For hierarchical sectors (e.g., "ai-ml" under "software")
+
+    // Related SIC codes (for matching with Companies House data)
+    relatedSicCodes: v.array(v.string()),
+
+    // Keywords for matching company descriptions
+    keywords: v.array(v.string()),
+
+    // Momentum metrics (updated periodically)
+    momentumScore: v.number(), // 0-100 based on funding trends
+    dealCount30d: v.optional(v.number()), // Deals in last 30 days
+    dealCount90d: v.optional(v.number()), // Deals in last 90 days
+    totalFunding30d: v.optional(v.number()), // Total funding in last 30 days (USD)
+    totalFunding90d: v.optional(v.number()), // Total funding in last 90 days (USD)
+    avgDealSize: v.optional(v.number()), // Average deal size (USD)
+
+    // Trend indicators
+    isEmerging: v.boolean(), // High growth sectors
+    isHot: v.boolean(), // Currently trending
+    trendDirection: v.union(
+      v.literal("up"),
+      v.literal("stable"),
+      v.literal("down")
+    ),
+    growthRate: v.optional(v.number()), // YoY growth percentage
+
+    // Notable VCs and companies
+    topVcs: v.optional(v.array(v.string())), // VCs actively investing
+    notableStartups: v.optional(v.array(v.string())), // Notable companies in sector
+
+    // Metadata
+    lastUpdated: v.number(),
+    dataSource: v.optional(v.string()), // "crunchbase", "pitchbook", "manual"
+  })
+    .index("by_sector_id", ["sectorId"])
+    .index("by_momentum", ["momentumScore"])
+    .index("by_emerging", ["isEmerging"])
+    .searchIndex("search_sector", {
+      searchField: "name",
+      filterFields: ["isEmerging", "isHot"],
+    }),
+
+  // Sector Funding Events - tracks individual funding rounds for momentum calculation
+  sectorFundingEvents: defineTable({
+    sectorId: v.string(),
+
+    // Event details
+    companyName: v.string(),
+    roundType: v.string(), // "pre-seed", "seed", "series-a", etc.
+    amount: v.optional(v.number()), // USD
+    date: v.number(), // Timestamp
+
+    // Investors
+    leadInvestor: v.optional(v.string()),
+    investors: v.optional(v.array(v.string())),
+
+    // Source
+    source: v.string(), // "crunchbase", "techcrunch", "manual"
+    sourceUrl: v.optional(v.string()),
+
+    // Metadata
+    createdAt: v.number(),
+  })
+    .index("by_sector", ["sectorId"])
+    .index("by_date", ["date"])
+    .index("by_sector_and_date", ["sectorId", "date"]),
+
+  // Startup-Sector mapping for enhanced qualification
+  startupSectors: defineTable({
+    startupId: v.id("startups"),
+    sectorId: v.string(),
+
+    // Confidence score for the sector match
+    confidence: v.number(), // 0-100
+    matchSource: v.string(), // "sic_code", "keyword", "manual"
+
+    // Timing bonus - early entry into hot sector
+    sectorMomentumBonus: v.optional(v.number()), // Additional points for hot sectors
+
+    createdAt: v.number(),
+  })
+    .index("by_startup", ["startupId"])
+    .index("by_sector", ["sectorId"]),
 });

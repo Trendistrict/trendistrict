@@ -21,6 +21,7 @@ const QUALITY_THRESHOLDS = {
   STEALTH_BONUS: 10, // Bonus for stealth mode startups
   RECENTLY_ANNOUNCED_BONUS: 5, // Bonus for recently announced
   MULTIPLE_FOUNDERS_BONUS: 5, // Bonus for having multiple quality founders
+  MAX_SECTOR_MOMENTUM_BONUS: 15, // Max bonus for hot sectors
 };
 
 // SIC code scoring - indicates market attractiveness and scalability
@@ -115,7 +116,8 @@ function calculateStartupScore(
   founders: Array<{ overallScore?: number; isFounder: boolean }>,
   sicCodes: string[] | undefined,
   isStealthMode: boolean | undefined,
-  recentlyAnnounced: boolean | undefined
+  recentlyAnnounced: boolean | undefined,
+  sectorMomentumBonus: number = 0 // Bonus from hot/emerging sectors
 ): StartupScoreResult {
   const reasoning: string[] = [];
 
@@ -157,6 +159,13 @@ function calculateStartupScore(
   if (founderScores.length >= 2 && founderScores.every(s => s >= 60)) {
     bonusScore += QUALITY_THRESHOLDS.MULTIPLE_FOUNDERS_BONUS;
     reasoning.push(`Multiple quality founders bonus: +${QUALITY_THRESHOLDS.MULTIPLE_FOUNDERS_BONUS}`);
+  }
+
+  // Add sector momentum bonus (capped at MAX_SECTOR_MOMENTUM_BONUS)
+  if (sectorMomentumBonus > 0) {
+    const cappedBonus = Math.min(sectorMomentumBonus, QUALITY_THRESHOLDS.MAX_SECTOR_MOMENTUM_BONUS);
+    bonusScore += cappedBonus;
+    reasoning.push(`Sector momentum bonus: +${cappedBonus} (hot/emerging sector)`);
   }
 
   // 4. Calculate overall score (weighted)
@@ -238,12 +247,29 @@ export const qualifyStartup = internalAction({
 
     const { startup, founders } = data;
 
+    // Match startup to market sectors and get momentum bonus
+    let sectorMomentumBonus = 0;
+    try {
+      const sectorMatch = await ctx.runMutation(internal.marketSectors.matchStartupToSectors, {
+        startupId: args.startupId,
+        sicCodes: startup.sicCodes || [],
+      });
+      sectorMomentumBonus = sectorMatch.momentumBonus;
+      if (sectorMomentumBonus > 0) {
+        console.log(`Sector momentum bonus for ${startup.companyName}: +${sectorMomentumBonus} (${sectorMatch.sectorsMatched} sectors matched)`);
+      }
+    } catch (error) {
+      // Sector matching is optional - don't fail qualification if it fails
+      console.log("Sector matching skipped:", error instanceof Error ? error.message : "Unknown error");
+    }
+
     // Calculate scores
     const result = calculateStartupScore(
       founders,
       startup.sicCodes,
       startup.isStealthMode,
-      startup.recentlyAnnounced
+      startup.recentlyAnnounced,
+      sectorMomentumBonus
     );
 
     // Determine new stage based on qualification status
