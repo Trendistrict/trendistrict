@@ -78,7 +78,14 @@ export const getPipelineStatus = query({
 export const getUsersWithDiscoveryEnabled = internalQuery({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("userSettings").collect();
+    const settings = await ctx.db.query("userSettings").collect();
+    // Filter to users who have:
+    // 1. autoDiscoveryEnabled flag set to true (or undefined for backwards compatibility if they have API key)
+    // 2. Companies House API key configured
+    return settings.filter((s) =>
+      s.companiesHouseApiKey &&
+      (s.autoDiscoveryEnabled === true || (s.autoDiscoveryEnabled === undefined && s.companiesHouseApiKey))
+    );
   },
 });
 
@@ -86,7 +93,26 @@ export const getUsersWithEnrichmentEnabled = internalQuery({
   args: {},
   handler: async (ctx) => {
     const settings = await ctx.db.query("userSettings").collect();
-    return settings.filter((s) => s.exaApiKey);
+    // Filter to users who have:
+    // 1. autoEnrichmentEnabled flag set to true (or undefined for backwards compatibility if they have API key)
+    // 2. Exa API key configured
+    return settings.filter((s) =>
+      s.exaApiKey &&
+      (s.autoEnrichmentEnabled === true || (s.autoEnrichmentEnabled === undefined && s.exaApiKey))
+    );
+  },
+});
+
+export const getUsersWithQualificationEnabled = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const settings = await ctx.db.query("userSettings").collect();
+    // Filter to users who have:
+    // autoQualificationEnabled flag set to true (or undefined for backwards compatibility)
+    // Qualification doesn't require a specific API key, just data to process
+    return settings.filter((s) =>
+      s.autoQualificationEnabled === true || s.autoQualificationEnabled === undefined
+    );
   },
 });
 

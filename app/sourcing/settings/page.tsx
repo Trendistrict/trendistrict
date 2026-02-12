@@ -31,7 +31,9 @@ import {
   IconSparkles,
   IconSearch,
   IconPlayerPlay,
+  IconRobot,
 } from "@tabler/icons-react";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function SettingsPage() {
@@ -68,6 +70,10 @@ export default function SettingsPage() {
     rocketReachApiKey: "",
     zeroBouncApiKey: "",
     crunchbaseApiKey: "",
+    // Autonomous pipeline controls
+    autoDiscoveryEnabled: true,
+    autoEnrichmentEnabled: true,
+    autoQualificationEnabled: true,
   });
 
   const [newCompany, setNewCompany] = useState({ name: "", category: "" });
@@ -126,6 +132,10 @@ export default function SettingsPage() {
         rocketReachApiKey: settings.rocketReachApiKey ?? "",
         zeroBouncApiKey: settings.zeroBouncApiKey ?? "",
         crunchbaseApiKey: settings.crunchbaseApiKey ?? "",
+        // Autonomous pipeline controls (default to true for backwards compatibility)
+        autoDiscoveryEnabled: settings.autoDiscoveryEnabled ?? true,
+        autoEnrichmentEnabled: settings.autoEnrichmentEnabled ?? true,
+        autoQualificationEnabled: settings.autoQualificationEnabled ?? true,
       });
     }
   }, [settings]);
@@ -147,6 +157,10 @@ export default function SettingsPage() {
         rocketReachApiKey: formData.rocketReachApiKey || undefined,
         zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
         crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+        // Autonomous pipeline controls
+        autoDiscoveryEnabled: formData.autoDiscoveryEnabled,
+        autoEnrichmentEnabled: formData.autoEnrichmentEnabled,
+        autoQualificationEnabled: formData.autoQualificationEnabled,
       });
     } catch (error) {
       console.error("Settings save failed:", error);
@@ -423,6 +437,98 @@ export default function SettingsPage() {
                 ) : (
                   <Badge variant="outline" className="text-xs text-muted-foreground">Apollo <IconX className="h-3 w-3 ml-1" /></Badge>
                 )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Automation Controls Card */}
+          <Card className="border-2 border-blue-500/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconRobot className="h-5 w-5 text-blue-500" />
+                Autonomous Pipeline Controls
+              </CardTitle>
+              <CardDescription>
+                Enable or disable automatic background processing. When enabled, the pipeline runs on a schedule.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4">
+                {/* Auto Discovery Toggle */}
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm font-medium">Auto Discovery</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically discover new UK tech startups from Companies House (runs every 6 hours)
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.autoDiscoveryEnabled}
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, autoDiscoveryEnabled: checked })
+                    }
+                    disabled={!formData.companiesHouseApiKey}
+                  />
+                </div>
+
+                {/* Auto Enrichment Toggle */}
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm font-medium">Auto Enrichment</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically enrich founder profiles with LinkedIn data (runs every 2 hours)
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.autoEnrichmentEnabled}
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, autoEnrichmentEnabled: checked })
+                    }
+                    disabled={!formData.exaApiKey}
+                  />
+                </div>
+
+                {/* Auto Qualification Toggle */}
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm font-medium">Auto Qualification</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically score and qualify startups (runs every 3 hours)
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.autoQualificationEnabled}
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, autoQualificationEnabled: checked })
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* Warning if API keys missing */}
+              {(!formData.companiesHouseApiKey || !formData.exaApiKey) && (
+                <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-xs text-yellow-600">
+                  <p className="font-medium">Some automation features are disabled:</p>
+                  <ul className="mt-1 list-disc list-inside">
+                    {!formData.companiesHouseApiKey && (
+                      <li>Auto Discovery requires Companies House API key</li>
+                    )}
+                    {!formData.exaApiKey && (
+                      <li>Auto Enrichment requires Exa.ai API key</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div className="flex justify-end pt-2">
+                <Button onClick={handleSaveSettings} disabled={saving} size="sm">
+                  {saving ? (
+                    <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <IconCheck className="h-4 w-4 mr-2" />
+                  )}
+                  Save Automation Settings
+                </Button>
               </div>
             </CardContent>
           </Card>

@@ -298,6 +298,11 @@ export default defineSchema({
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),
 
+    // Autonomous pipeline controls
+    autoDiscoveryEnabled: v.optional(v.boolean()), // Enable automatic startup discovery
+    autoEnrichmentEnabled: v.optional(v.boolean()), // Enable automatic LinkedIn enrichment
+    autoQualificationEnabled: v.optional(v.boolean()), // Enable automatic qualification scoring
+
     createdAt: v.number(),
     updatedAt: v.number(),
   })

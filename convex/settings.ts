@@ -35,6 +35,10 @@ export const upsert = mutation({
     crunchbaseApiKey: v.optional(v.string()),
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),
+    // Autonomous pipeline controls
+    autoDiscoveryEnabled: v.optional(v.boolean()),
+    autoEnrichmentEnabled: v.optional(v.boolean()),
+    autoQualificationEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserId(ctx);

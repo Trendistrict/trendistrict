@@ -312,9 +312,18 @@ async function runEnrichmentBatch(
       startupId: startup._id,
     });
 
+    let foundersAttempted = 0;
+    let foundersEnrichedThisStartup = 0;
+    let foundersSkipped = 0;
+
     for (const founder of founders) {
       // Skip if already enriched
-      if (founder.linkedInUrl && founder.overallScore) continue;
+      if (founder.linkedInUrl && founder.overallScore) {
+        foundersSkipped++;
+        continue;
+      }
+
+      foundersAttempted++;
 
       try {
         // Record API request
@@ -345,6 +354,7 @@ async function runEnrichmentBatch(
             console.log("Exa rate limited, stopping batch");
             break;
           }
+          console.log(`Exa API error for ${founder.firstName} ${founder.lastName}: ${response.status}`);
           continue;
         }
 
@@ -365,6 +375,11 @@ async function runEnrichmentBatch(
           });
 
           foundersEnriched++;
+          foundersEnrichedThisStartup++;
+          console.log(`Enriched founder: ${founder.firstName} ${founder.lastName} (score: ${scores.overallScore})`);
+        } else {
+          // IMPORTANT: Log when LinkedIn profile not found - this was a silent failure before
+          console.log(`No LinkedIn profile found for: ${founder.firstName} ${founder.lastName} (${data.results?.length || 0} results returned)`);
         }
 
         await sleep(1000); // Rate limit Exa requests
@@ -373,11 +388,22 @@ async function runEnrichmentBatch(
       }
     }
 
-    // Move startup to researching stage after enrichment
-    await ctx.runMutation(internal.backgroundJobsDb.updateStartupStage, {
-      startupId: startup._id,
-      stage: "researching",
-    });
+    // Log enrichment summary for this startup
+    console.log(`Startup ${startup.companyName}: ${foundersEnrichedThisStartup}/${foundersAttempted} founders enriched (${foundersSkipped} already enriched)`);
+
+    // Only move to "researching" stage if we actually attempted and succeeded with some enrichment,
+    // OR if all founders were already enriched (skipped), OR if enrichment was attempted
+    // This prevents startups from getting stuck if Exa returns no results
+    const shouldMoveToResearching = foundersEnrichedThisStartup > 0 || foundersSkipped > 0 || foundersAttempted > 0;
+
+    if (shouldMoveToResearching) {
+      await ctx.runMutation(internal.backgroundJobsDb.updateStartupStage, {
+        startupId: startup._id,
+        stage: "researching",
+      });
+    } else {
+      console.log(`Startup ${startup.companyName} staying in 'discovered' - no founders to enrich`);
+    }
 
     startupsProcessed++;
 
@@ -405,7 +431,8 @@ async function runEnrichmentBatch(
 export const runScheduledQualification = internalAction({
   args: {},
   handler: async (ctx) => {
-    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
+    // Get users who have auto-qualification enabled
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithQualificationEnabled);
 
     for (const settings of usersWithSettings) {
       try {
