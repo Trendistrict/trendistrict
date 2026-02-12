@@ -94,6 +94,23 @@ export default defineSchema({
     experienceScore: v.optional(v.number()), // 0-100
     overallScore: v.optional(v.number()), // 0-100
 
+    // GitHub data (free API - no key required)
+    githubUsername: v.optional(v.string()),
+    githubUrl: v.optional(v.string()),
+    githubAvatarUrl: v.optional(v.string()),
+    githubPublicRepos: v.optional(v.number()),
+    githubFollowers: v.optional(v.number()),
+    technicalScore: v.optional(v.number()), // 0-100 based on GitHub activity
+    primaryLanguages: v.optional(v.array(v.string())),
+    githubContributionLevel: v.optional(
+      v.union(
+        v.literal("high"),
+        v.literal("medium"),
+        v.literal("low"),
+        v.literal("none")
+      )
+    ),
+
     // Sourcing metadata
     source: v.string(), // "linkedin", "manual", "companies_house"
     discoveredAt: v.number(),

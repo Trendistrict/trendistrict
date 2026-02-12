@@ -386,6 +386,23 @@ async function runEnrichmentBatch(
       } catch (error) {
         console.error(`Error enriching founder ${founder._id}:`, error);
       }
+
+      // Try GitHub enrichment (FREE - no API key needed)
+      // This adds technical signals for founders
+      try {
+        if (!founder.githubUrl) {
+          const githubResult = await ctx.runAction(internal.githubEnrichment.enrichFounderWithGitHub, {
+            founderId: founder._id,
+          });
+          if (githubResult.found && githubResult.technicalScore) {
+            console.log(`GitHub enriched: ${founder.firstName} ${founder.lastName} (technical score: ${githubResult.technicalScore})`);
+          }
+          await sleep(6000); // GitHub rate limit: 10 req/min unauthenticated
+        }
+      } catch (error) {
+        // GitHub enrichment is optional, don't fail the whole process
+        console.log(`GitHub enrichment skipped for ${founder.firstName} ${founder.lastName}: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
     }
 
     // Log enrichment summary for this startup
