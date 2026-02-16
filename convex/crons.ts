@@ -3,51 +3,73 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// Run auto-discovery every 6 hours to find new startups
-// This respects the daily limit of 20 startups by running in batches
+// ============ PIPELINE STAGE 1: DISCOVERY ============
+// Find new UK tech startups from Companies House
+// Runs every 6 hours, 5 per batch = ~20/day
 crons.interval(
   "auto-discovery",
   { hours: 6 },
   internal.backgroundJobs.runScheduledDiscovery
 );
 
-// Run enrichment every 2 hours to process discovered startups
+// ============ PIPELINE STAGE 2: ENRICHMENT ============
+// Enrich discovered startups: LinkedIn profiles via Exa + email discovery via Apollo
+// Moves startups from "discovered" → "researching"
 crons.interval(
   "auto-enrichment",
   { hours: 2 },
   internal.backgroundJobs.runScheduledEnrichment
 );
 
-// Process outreach queue every 30 minutes
-// Sends one email at a time to avoid spam filters
+// ============ PIPELINE STAGE 3: QUALIFICATION ============
+// Evaluate "researching" startups and promote good ones to "qualified"
+// Based on: team score, sector scalability, stealth signals, education quality
+crons.interval(
+  "auto-qualification",
+  { hours: 3 },
+  internal.backgroundJobs.runAutoQualification
+);
+
+// ============ PIPELINE STAGE 4: OUTREACH ============
+// Auto-queue personalized emails to founders of qualified startups
+// Moves startups from "qualified" → "contacted"
+crons.interval(
+  "auto-outreach",
+  { hours: 4 },
+  internal.backgroundJobs.runAutoOutreach
+);
+
+// Process the outreach queue - actually sends the emails via Resend
+// Sends one email per user per run to avoid spam filters
 crons.interval(
   "process-outreach-queue",
   { minutes: 30 },
   internal.backgroundJobs.processOutreachQueue
 );
 
-// Clean up old job records daily
-crons.daily(
-  "cleanup-old-jobs",
-  { hourUTC: 3, minuteUTC: 0 },
-  internal.backgroundJobs.cleanupOldRecords
-);
-
-// Auto-match qualified startups with VCs every 4 hours
-// Finds high-quality matches based on stage, sector, and relationship
+// ============ PIPELINE STAGE 5: VC MATCHING ============
+// Match qualified/contacted startups with VCs and create introduction records
+// Creates intros in "considering" status for high-quality matches (score >= 60)
 crons.interval(
   "auto-vc-matching",
   { hours: 4 },
   internal.backgroundJobs.runAutoMatching
 );
 
-// Discover new VCs weekly on Sunday at midnight UTC
-// Scrapes BVCA, discovers partner emails, and validates VCs
-// Target: 15-20 new VCs per week
+// ============ VC DISCOVERY ============
+// Discover new VCs weekly - curated UK list + email enrichment via Apollo/Hunter
 crons.weekly(
   "auto-vc-discovery",
   { dayOfWeek: "sunday", hourUTC: 0, minuteUTC: 0 },
   internal.backgroundJobs.runScheduledVcDiscovery
+);
+
+// ============ MAINTENANCE ============
+// Clean up old job records daily
+crons.daily(
+  "cleanup-old-jobs",
+  { hourUTC: 3, minuteUTC: 0 },
+  internal.backgroundJobs.cleanupOldRecords
 );
 
 export default crons;

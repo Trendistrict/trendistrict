@@ -18,6 +18,16 @@ export const RATE_LIMITS = {
     windowMs: 60 * 1000, // 1 minute
     retryAfterMs: 5000,
   },
+  apollo: {
+    requestsPerWindow: 50, // Apollo.io rate limit (adjust based on your plan)
+    windowMs: 60 * 1000, // 1 minute
+    retryAfterMs: 3000,
+  },
+  hunter: {
+    requestsPerWindow: 25, // Hunter.io rate limit
+    windowMs: 60 * 1000, // 1 minute
+    retryAfterMs: 3000,
+  },
 } as const;
 
 export type ApiName = keyof typeof RATE_LIMITS;

@@ -297,7 +297,10 @@ async function runEnrichmentBatch(
   exaApiKey: string,
   limit: number,
   jobId: Id<"jobRuns">
-): Promise<{ startupsProcessed: number; foundersEnriched: number }> {
+): Promise<{ startupsProcessed: number; foundersEnriched: number; emailsFound: number }> {
+  // Get user settings for Apollo API key
+  const settings = await ctx.runQuery(internal.backgroundJobsDb.getUserSettings, { userId });
+
   // Get startups needing enrichment
   const startups = await ctx.runQuery(internal.autoSourcingHelpers.getStartupsNeedingEnrichment, {
     userId,
@@ -306,6 +309,7 @@ async function runEnrichmentBatch(
 
   let startupsProcessed = 0;
   let foundersEnriched = 0;
+  let emailsFound = 0;
 
   for (const startup of startups) {
     const founders = await ctx.runQuery(internal.autoSourcingHelpers.getFoundersForStartup, {
@@ -313,61 +317,85 @@ async function runEnrichmentBatch(
     });
 
     for (const founder of founders) {
-      // Skip if already enriched
-      if (founder.linkedInUrl && founder.overallScore) continue;
+      // Skip if already fully enriched (has LinkedIn, score, AND email)
+      if (founder.linkedInUrl && founder.overallScore && founder.email) continue;
 
       try {
-        // Record API request
-        await ctx.runMutation(internal.jobHelpers.recordApiRequest, {
-          userId,
-          apiName: "exa",
-        });
-
-        // Search LinkedIn via Exa
-        const searchQuery = `${founder.firstName} ${founder.lastName} site:linkedin.com/in`;
-        const response = await fetch("https://api.exa.ai/search", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": exaApiKey,
-          },
-          body: JSON.stringify({
-            query: searchQuery,
-            numResults: 3,
-            includeDomains: ["linkedin.com"],
-            type: "neural",
-            contents: { text: true },
-          }),
-        });
-
-        if (!response.ok) {
-          if (response.status === 429) {
-            console.log("Exa rate limited, stopping batch");
-            break;
-          }
-          continue;
-        }
-
-        const data = await response.json();
-        const linkedInResult = data.results?.find((r: { url: string }) =>
-          r.url.includes("linkedin.com/in/")
-        );
-
-        if (linkedInResult) {
-          // Parse profile and calculate scores
-          const profileData = parseLinkedInContent(linkedInResult.url, linkedInResult.text || "");
-          const scores = calculateFounderScore(profileData);
-
-          await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
-            founderId: founder._id,
-            linkedInData: profileData,
-            scores,
+        // --- Step 1: LinkedIn enrichment via Exa ---
+        if (!founder.linkedInUrl || !founder.overallScore) {
+          await ctx.runMutation(internal.jobHelpers.recordApiRequest, {
+            userId,
+            apiName: "exa",
           });
 
-          foundersEnriched++;
+          const searchQuery = `${founder.firstName} ${founder.lastName} site:linkedin.com/in`;
+          const response = await fetch("https://api.exa.ai/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": exaApiKey,
+            },
+            body: JSON.stringify({
+              query: searchQuery,
+              numResults: 3,
+              includeDomains: ["linkedin.com"],
+              type: "neural",
+              contents: { text: true },
+            }),
+          });
+
+          if (!response.ok) {
+            if (response.status === 429) {
+              console.log("Exa rate limited, stopping batch");
+              break;
+            }
+            continue;
+          }
+
+          const data = await response.json();
+          const linkedInResult = data.results?.find((r: { url: string }) =>
+            r.url.includes("linkedin.com/in/")
+          );
+
+          if (linkedInResult) {
+            const profileData = parseLinkedInContent(linkedInResult.url, linkedInResult.text || "");
+            const scores = calculateFounderScore(profileData);
+
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+              founderId: founder._id,
+              linkedInData: profileData,
+              scores,
+            });
+
+            foundersEnriched++;
+          }
+
+          await sleep(1000);
         }
 
-        await sleep(1000); // Rate limit Exa requests
+        // --- Step 2: Email discovery via Apollo People Match ---
+        if (!founder.email && settings?.apolloApiKey) {
+          const email = await discoverFounderEmail(
+            founder.firstName,
+            founder.lastName,
+            startup.companyName,
+            founder.linkedInUrl,
+            settings.apolloApiKey,
+            settings.hunterApiKey,
+          );
+
+          if (email) {
+            await ctx.runMutation(internal.backgroundJobsDb.updateFounderEmail, {
+              founderId: founder._id,
+              email,
+              emailSource: "apollo",
+            });
+            emailsFound++;
+            console.log(`Found email for ${founder.firstName} ${founder.lastName}: ${email}`);
+          }
+
+          await sleep(500);
+        }
       } catch (error) {
         console.error(`Error enriching founder ${founder._id}:`, error);
       }
@@ -387,7 +415,69 @@ async function runEnrichmentBatch(
     });
   }
 
-  return { startupsProcessed, foundersEnriched };
+  return { startupsProcessed, foundersEnriched, emailsFound };
+}
+
+// Discover a founder's email using Apollo People Match + Hunter fallback
+async function discoverFounderEmail(
+  firstName: string,
+  lastName: string,
+  companyName: string,
+  linkedInUrl: string | undefined,
+  apolloApiKey: string,
+  hunterApiKey?: string,
+): Promise<string | null> {
+  // 1. Try Apollo People Match (best results with LinkedIn URL)
+  try {
+    const body: Record<string, string> = {
+      first_name: firstName,
+      last_name: lastName,
+      organization_name: companyName,
+    };
+    if (linkedInUrl) {
+      body.linkedin_url = linkedInUrl;
+    }
+
+    const response = await fetch("https://api.apollo.io/v1/people/match", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "X-Api-Key": apolloApiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.person?.email) {
+        return data.person.email;
+      }
+    }
+  } catch (error) {
+    console.error("Apollo People Match error:", error);
+  }
+
+  // 2. Try Hunter email finder if we can guess the domain
+  if (hunterApiKey) {
+    try {
+      // Try to find email by name + company
+      const response = await fetch(
+        `https://api.hunter.io/v2/email-finder?company=${encodeURIComponent(companyName)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&api_key=${hunterApiKey}`,
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.data?.email) {
+          return data.data.email;
+        }
+      }
+    } catch (error) {
+      console.error("Hunter email finder error:", error);
+    }
+  }
+
+  return null;
 }
 
 // ============ OUTREACH QUEUE PROCESSING ============
@@ -697,6 +787,247 @@ export const runScheduledVcDiscovery = internalAction({
   },
 });
 
+// ============ AUTO-QUALIFICATION ============
+
+// SIC code scalability scores for qualification
+const SIC_SCALABILITY: Record<string, number> = {
+  "62": 90, // Software
+  "63": 85, // Data/web
+  "72": 95, // R&D/AI
+  "64": 90, // Fintech
+  "65": 85, // Insurtech
+  "66": 80, // Financial services
+  "86": 80, // Healthtech
+  "85": 80, // Edtech
+  "68": 75, // Proptech
+  "35": 85, // Cleantech
+  "47": 70, // E-commerce
+  "58": 75, // Publishing/gaming
+  "59": 70, // Media
+  "78": 80, // HR tech
+};
+
+export const runAutoQualification = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      try {
+        // Get all "researching" startups
+        const startups = await ctx.runQuery(internal.backgroundJobsDb.getResearchingStartups, {
+          userId: settings.userId,
+        });
+
+        if (startups.length === 0) continue;
+
+        let qualified = 0;
+        let passed = 0;
+
+        for (const startup of startups) {
+          // Get founders for this startup
+          const founders = await ctx.runQuery(internal.backgroundJobsDb.getFoundersForStartup, {
+            startupId: startup._id,
+          });
+
+          // Calculate team score from founder scores
+          const founderScores = founders
+            .map((f) => f.overallScore)
+            .filter((s): s is number => s !== undefined);
+
+          const teamScore = founderScores.length > 0
+            ? Math.round(founderScores.reduce((a, b) => a + b, 0) / founderScores.length)
+            : 0;
+
+          // Check for strong signals
+          const hasTopTierEducation = founders.some((f) =>
+            f.education?.some((e) => e.isTopTier)
+          );
+          const hasHighGrowthExperience = founders.some((f) =>
+            f.experience?.some((e) => e.isHighGrowth)
+          );
+          const isStealth = startup.isStealthMode;
+          const isRecentlyAnnounced = startup.recentlyAnnounced;
+
+          // Calculate SIC scalability score
+          const sicCodes = startup.sicCodes ?? [];
+          let maxScalability = 0;
+          for (const sic of sicCodes) {
+            const prefix = sic.substring(0, 2);
+            if (SIC_SCALABILITY[prefix] && SIC_SCALABILITY[prefix] > maxScalability) {
+              maxScalability = SIC_SCALABILITY[prefix];
+            }
+          }
+          const marketScore = maxScalability;
+
+          // Overall startup score (weighted)
+          const overallScore = Math.round(
+            teamScore * 0.5 + // 50% team quality
+            marketScore * 0.3 + // 30% market/scalability
+            (isStealth ? 10 : 0) + // Stealth bonus
+            (isRecentlyAnnounced ? 5 : 0) + // Recently announced bonus
+            (hasTopTierEducation ? 5 : 0) // Top-tier edu bonus
+          );
+
+          // Qualification criteria - intentionally broad to learn through outreach
+          const isQualified =
+            // At least one founder has been enriched
+            founderScores.length > 0 &&
+            (
+              // Team score is decent
+              teamScore >= 35 ||
+              // Or has strong individual signals
+              hasTopTierEducation ||
+              hasHighGrowthExperience ||
+              // Or has interesting signals
+              isStealth ||
+              isRecentlyAnnounced
+            ) &&
+            // Must be in a scalable sector
+            maxScalability >= 65;
+
+          if (isQualified) {
+            await ctx.runMutation(internal.backgroundJobsDb.qualifyStartup, {
+              startupId: startup._id,
+              overallScore,
+              teamScore,
+              marketScore,
+            });
+            qualified++;
+          } else if (founderScores.length > 0 && maxScalability < 65) {
+            // Not in a scalable sector - pass
+            await ctx.runMutation(internal.backgroundJobsDb.updateStartupStage, {
+              startupId: startup._id,
+              stage: "passed",
+            });
+            passed++;
+          }
+          // Otherwise leave in "researching" until founders are enriched
+        }
+
+        console.log(
+          `Auto-qualification for user ${settings.userId}: ` +
+          `${qualified} qualified, ${passed} passed, ` +
+          `${startups.length - qualified - passed} still researching`
+        );
+      } catch (error) {
+        console.error(`Auto-qualification failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
+// ============ AUTO-OUTREACH ============
+
+// Personalize template text (same logic as outreachQueue.ts but for internal use)
+function personalizeText(
+  text: string,
+  variables: Record<string, string>
+): string {
+  let result = text;
+  for (const [key, value] of Object.entries(variables)) {
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    result = result.replace(new RegExp(`\\{${key}\\}`, "g"), value);
+  }
+  return result;
+}
+
+export const runAutoOutreach = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
+
+    for (const settings of usersWithSettings) {
+      if (!settings.emailApiKey) {
+        console.log(`Skipping auto-outreach for user ${settings.userId}: no email API key`);
+        continue;
+      }
+
+      try {
+        // Get the default outreach template
+        const template = await ctx.runQuery(internal.backgroundJobsDb.getUserDefaultTemplate, {
+          userId: settings.userId,
+        });
+
+        if (!template) {
+          console.log(`Skipping auto-outreach for user ${settings.userId}: no email template`);
+          continue;
+        }
+
+        // Get qualified startups that haven't been contacted yet
+        const startups = await ctx.runQuery(internal.backgroundJobsDb.getQualifiedStartupsNotContacted, {
+          userId: settings.userId,
+        });
+
+        if (startups.length === 0) continue;
+
+        let outreachQueued = 0;
+        let scheduledTime = Date.now();
+        const DELAY_BETWEEN_EMAILS = 30 * 60 * 1000; // 30 minutes between emails
+
+        for (const startup of startups.slice(0, 5)) { // Process max 5 startups per run
+          // Get founders with emails for this startup
+          const founders = await ctx.runQuery(internal.backgroundJobsDb.getFoundersWithEmails, {
+            startupId: startup._id,
+          });
+
+          if (founders.length === 0) continue;
+
+          let startupOutreachQueued = false;
+
+          for (const founder of founders) {
+            // Personalize the template
+            const subject = personalizeText(template.subject ?? "Quick intro", {
+              firstName: founder.firstName,
+              lastName: founder.lastName,
+              companyName: startup.companyName,
+              senderName: settings.emailFromName || "Robbie",
+            });
+
+            const message = personalizeText(template.body, {
+              firstName: founder.firstName,
+              lastName: founder.lastName,
+              companyName: startup.companyName,
+              headline: founder.headline ?? "",
+              senderName: settings.emailFromName || "Robbie",
+            });
+
+            // Queue the outreach
+            const queueId = await ctx.runMutation(internal.backgroundJobsDb.queueAutoOutreach, {
+              userId: settings.userId,
+              founderId: founder._id,
+              startupId: startup._id,
+              subject,
+              message,
+              scheduledFor: scheduledTime,
+            });
+
+            if (queueId) {
+              outreachQueued++;
+              startupOutreachQueued = true;
+              scheduledTime += DELAY_BETWEEN_EMAILS;
+            }
+          }
+
+          // Move startup to "contacted" stage if we queued outreach
+          if (startupOutreachQueued) {
+            await ctx.runMutation(internal.backgroundJobsDb.markStartupContacted, {
+              startupId: startup._id,
+            });
+          }
+        }
+
+        console.log(
+          `Auto-outreach for user ${settings.userId}: ` +
+          `${outreachQueued} emails queued for ${startups.length} qualified startups`
+        );
+      } catch (error) {
+        console.error(`Auto-outreach failed for user ${settings.userId}:`, error);
+      }
+    }
+  },
+});
+
 // ============ AUTO VC MATCHING ============
 
 // Helper to infer sectors from SIC codes (for matching)
@@ -761,21 +1092,27 @@ function inferSectorsFromSIC(sicCodes: string[]): string[] {
   return sectors;
 }
 
-// Auto-match qualified startups with VCs
+// Auto-match qualified startups with VCs - NOW CREATES INTRODUCTION RECORDS
 export const runAutoMatching = internalAction({
   args: {},
   handler: async (ctx) => {
-    // Get all users with settings
     const usersWithSettings = await ctx.runQuery(internal.backgroundJobsDb.getUsersWithDiscoveryEnabled);
 
     for (const settings of usersWithSettings) {
       try {
-        // Get qualified startups for this user
+        // Get qualified+ startups (qualified, contacted, or meeting stage)
         const qualifiedStartups = await ctx.runQuery(internal.backgroundJobsDb.getQualifiedStartups, {
           userId: settings.userId,
         });
 
-        if (qualifiedStartups.length === 0) continue;
+        // Also get contacted startups for matching
+        const contactedStartups = await ctx.runQuery(internal.backgroundJobsDb.getQualifiedStartupsNotContacted, {
+          userId: settings.userId,
+        });
+
+        const allMatchableStartups = [...qualifiedStartups, ...contactedStartups];
+
+        if (allMatchableStartups.length === 0) continue;
 
         // Get all VCs for this user
         const vcs = await ctx.runQuery(internal.backgroundJobsDb.getUserVCs, {
@@ -784,34 +1121,37 @@ export const runAutoMatching = internalAction({
 
         if (vcs.length === 0) continue;
 
-        // Get existing introductions
-        const existingIntros = await ctx.runQuery(internal.backgroundJobsDb.getUserIntroductions, {
-          userId: settings.userId,
-        });
+        let introsCreated = 0;
 
-        let matchesFound = 0;
-
-        // Check for high-quality matches (score >= 50)
-        for (const startup of qualifiedStartups) {
-          const introducedVcIds = new Set(
-            existingIntros
-              .filter((i) => i.startupId === startup._id)
-              .map((i) => i.vcConnectionId)
-          );
-
+        for (const startup of allMatchableStartups) {
           const startupSectors = inferSectorsFromSIC(startup.sicCodes ?? []);
           const startupStage = startup.fundingStage?.toLowerCase() || "pre-seed";
 
+          // Get the best founder for this startup (highest score)
+          const founders = await ctx.runQuery(internal.backgroundJobsDb.getFoundersForStartup, {
+            startupId: startup._id,
+          });
+          const bestFounder = founders
+            .filter((f) => f.overallScore)
+            .sort((a, b) => (b.overallScore ?? 0) - (a.overallScore ?? 0))[0];
+
           for (const vc of vcs) {
-            // Skip if already introduced
-            if (introducedVcIds.has(vc._id)) continue;
+            // Check if intro already exists
+            const existingIntro = await ctx.runQuery(internal.backgroundJobsDb.checkExistingIntroduction, {
+              startupId: startup._id,
+              vcConnectionId: vc._id,
+            });
+
+            if (existingIntro) continue;
 
             let score = 0;
+            const reasons: string[] = [];
 
             // Stage matching (40 points)
             const vcStages = (vc.investmentStages ?? []).map((s) => s.toLowerCase());
             if (vcStages.includes(startupStage)) {
               score += 40;
+              reasons.push(`Stage match: ${startupStage}`);
             }
 
             // Sector matching (20 points)
@@ -819,29 +1159,56 @@ export const runAutoMatching = internalAction({
             for (const sector of startupSectors) {
               if (vcSectors.some((vs) => vs.includes(sector) || sector.includes(vs))) {
                 score += 20;
+                reasons.push(`Sector match: ${sector}`);
                 break;
               }
             }
 
             // Relationship bonus (25 points max)
-            if (vc.relationshipStrength === "strong") score += 25;
-            else if (vc.relationshipStrength === "moderate") score += 15;
-            else score += 5;
+            if (vc.relationshipStrength === "strong") {
+              score += 25;
+              reasons.push("Strong relationship");
+            } else if (vc.relationshipStrength === "moderate") {
+              score += 15;
+              reasons.push("Moderate relationship");
+            } else {
+              score += 5;
+            }
 
             // Recent contact bonus (10 points)
             if (vc.lastContactDate) {
               const daysSinceContact = (Date.now() - vc.lastContactDate) / (1000 * 60 * 60 * 24);
-              if (daysSinceContact < 30) score += 10;
+              if (daysSinceContact < 30) {
+                score += 10;
+                reasons.push("Recent contact (<30 days)");
+              }
             }
 
-            // If score is 60+, it's a strong match
+            // Startup quality bonus (5 points)
+            if (startup.overallScore && startup.overallScore >= 60) {
+              score += 5;
+              reasons.push(`High quality startup (score: ${startup.overallScore})`);
+            }
+
+            // If score is 60+, create an introduction record
             if (score >= 60) {
-              matchesFound++;
+              await ctx.runMutation(internal.backgroundJobsDb.createAutoIntroduction, {
+                userId: settings.userId,
+                startupId: startup._id,
+                vcConnectionId: vc._id,
+                founderId: bestFounder?._id,
+                matchScore: score,
+                matchReasons: reasons.join(". "),
+              });
+              introsCreated++;
             }
           }
         }
 
-        console.log(`Auto-matching for user ${settings.userId}: ${matchesFound} high-quality matches found across ${qualifiedStartups.length} startups`);
+        console.log(
+          `Auto-matching for user ${settings.userId}: ` +
+          `${introsCreated} introductions created across ${allMatchableStartups.length} startups`
+        );
       } catch (error) {
         console.error(`Auto-matching failed for user ${settings.userId}:`, error);
       }
