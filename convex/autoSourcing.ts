@@ -485,7 +485,7 @@ const RECENTLY_ANNOUNCED_KEYWORDS = [
 const EXIT_KEYWORDS = [
   "acquired by", "acquisition", "acquired", "exit", "exited",
   "ipo", "went public", "publicly listed", "sold to", "merged with",
-  "successful exit", "series", "raised"
+  "successful exit"
 ];
 
 // Technical role/background indicators
@@ -535,7 +535,7 @@ async function fetchLinkedInProfileWithExa(
       },
       body: JSON.stringify({
         urls: [linkedInUrl],
-        text: true,
+        contents: { text: true },
       }),
     });
 
@@ -566,11 +566,15 @@ async function fetchLinkedInProfileWithExa(
 async function searchLinkedInProfileWithExa(
   apiKey: string,
   firstName: string,
-  lastName: string
+  lastName: string,
+  companyName?: string
 ): Promise<LinkedInProfile | null> {
   try {
-    // Use Exa.ai to search for the person's LinkedIn profile
-    const searchQuery = `${firstName} ${lastName} site:linkedin.com/in`;
+    // Include company name in search for better matching accuracy
+    const nameQuery = `${firstName} ${lastName}`;
+    const searchQuery = companyName
+      ? `${nameQuery} ${companyName} site:linkedin.com/in`
+      : `${nameQuery} site:linkedin.com/in`;
 
     const response = await fetch("https://api.exa.ai/search", {
       method: "POST",
@@ -580,7 +584,7 @@ async function searchLinkedInProfileWithExa(
       },
       body: JSON.stringify({
         query: searchQuery,
-        numResults: 5,
+        numResults: 3,
         includeDomains: ["linkedin.com"],
         type: "neural",
         useAutoprompt: true,
@@ -591,7 +595,7 @@ async function searchLinkedInProfileWithExa(
     });
 
     if (!response.ok) {
-      console.error("Exa.ai search error:", response.status);
+      console.error("Exa LinkedIn search error:", response.status);
       return null;
     }
 
@@ -601,8 +605,16 @@ async function searchLinkedInProfileWithExa(
       return null;
     }
 
-    // Find the best match (first result from linkedin.com/in)
-    const linkedInResult = data.results.find((r: { url: string }) =>
+    // Find the best match — verify profile text contains the person's name
+    const firstLower = firstName.toLowerCase();
+    const lastLower = lastName.toLowerCase();
+
+    const linkedInResult = data.results.find((r: { url: string; text?: string }) => {
+      if (!r.url.includes("linkedin.com/in/")) return false;
+      const text = (r.text || "").toLowerCase();
+      // Verify the profile text mentions the person's name
+      return text.includes(firstLower) && text.includes(lastLower);
+    }) || data.results.find((r: { url: string }) =>
       r.url.includes("linkedin.com/in/")
     );
 
@@ -800,7 +812,8 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
   if (yearMatches) {
     const years = yearMatches.map(Number).filter(y => y >= 1980 && y <= currentYear);
     if (years.length >= 2) {
-      yearsOfExperience = currentYear - Math.min(...years);
+      const minYear = years.reduce((a, b) => Math.min(a, b));
+      yearsOfExperience = currentYear - minYear;
     }
   }
 
@@ -972,7 +985,8 @@ export const enrichDiscoveredStartups = action({
             const profile = await searchLinkedInProfileWithExa(
               args.exaApiKey,
               founder.firstName,
-              founder.lastName
+              founder.lastName,
+              startup.companyName
             );
 
             if (profile) {
@@ -1122,7 +1136,8 @@ export const reEnrichAllFounders = action({
               const profile = await searchLinkedInProfileWithExa(
                 args.exaApiKey,
                 founder.firstName,
-                founder.lastName
+                founder.lastName,
+                startup.companyName
               );
 
               if (profile) {
@@ -1397,11 +1412,11 @@ async function enrichCompanyDeep(
     // Run multiple Exa searches in parallel for different aspects
     const [generalResults, newsResults, fundingResults] = await Promise.all([
       // 1. General company info + website
-      exaSearch(apiKey, `${companyName} UK startup company`, 5),
+      exaSearch(apiKey, `"${companyName}" startup`, 5),
       // 2. News and press mentions
-      exaSearch(apiKey, `${companyName} startup news announcement launch`, 5, NEWS_DOMAINS),
+      exaSearch(apiKey, `"${companyName}" startup news announcement`, 5, NEWS_DOMAINS),
       // 3. Funding/investment news
-      exaSearch(apiKey, `${companyName} startup funding raised investment round`, 5),
+      exaSearch(apiKey, `"${companyName}" funding raised investment`, 5),
     ]);
 
     const result: CompanyEnrichmentResult = {};
@@ -1531,7 +1546,10 @@ async function enrichCompanyDeep(
               const numStr = amountParts.find(p => /\d/.test(p));
               const suffix = amountParts.find(p => /^(m|k|bn|million|billion)/i.test(p));
               if (numStr) {
-                funding.amount = `£${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
+                // Preserve original currency symbol from the match
+                const currencyMatch = match[0].match(/[£$€]/);
+                const currency = currencyMatch ? currencyMatch[0] : "£";
+                funding.amount = `${currency}${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
               }
             }
 
@@ -1650,10 +1668,14 @@ async function exaSearch(
       body: JSON.stringify(body),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error("Exa search error:", response.status, query);
+      return null;
+    }
     const data = await response.json();
     return data.results || null;
-  } catch {
+  } catch (error) {
+    console.error("Exa search exception:", error);
     return null;
   }
 }
@@ -1672,14 +1694,18 @@ async function exaFetchUrl(
       },
       body: JSON.stringify({
         urls: [url],
-        text: true,
+        contents: { text: true },
       }),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error("Exa fetchUrl error:", response.status, url);
+      return null;
+    }
     const data = await response.json();
     return data.results?.[0] || null;
-  } catch {
+  } catch (error) {
+    console.error("Exa fetchUrl exception:", error);
     return null;
   }
 }
@@ -1742,29 +1768,32 @@ export async function enrichFromCrunchbase(
       else result.totalFunding = `$${amt}`;
     }
 
-    // Last round
-    if (props.last_funding_type) {
+    // Last round — type-check before calling .replace()
+    if (typeof props.last_funding_type === "string") {
       result.lastRound = props.last_funding_type.replace(/_/g, " ");
     }
-    if (props.last_funding_at) {
+    if (typeof props.last_funding_at === "string") {
       result.lastRoundDate = props.last_funding_at;
     }
 
-    // Investors
-    if (props.investor_identifiers) {
-      result.investors = props.investor_identifiers
+    // Investors — filter out null/undefined values
+    if (Array.isArray(props.investor_identifiers)) {
+      result.investors = (props.investor_identifiers as Array<{ value?: string }>)
         .slice(0, 10)
-        .map((i: { value: string }) => i.value);
+        .map((i) => i?.value)
+        .filter((val): val is string => typeof val === "string" && val.length > 0);
     }
 
-    // Employee count
-    if (props.num_employees_enum) {
+    // Employee count — type-check before calling .replace()
+    if (typeof props.num_employees_enum === "string") {
       result.employeeCount = props.num_employees_enum.replace(/c_/g, "").replace(/_/g, "-");
     }
 
-    // Categories
-    if (props.categories) {
-      result.categories = props.categories.map((c: { value: string }) => c.value);
+    // Categories — filter out null/undefined values
+    if (Array.isArray(props.categories)) {
+      result.categories = (props.categories as Array<{ value?: string }>)
+        .map((c) => c?.value)
+        .filter((val): val is string => typeof val === "string" && val.length > 0);
     }
 
     return result;

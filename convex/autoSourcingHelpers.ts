@@ -269,8 +269,13 @@ export const updateFounderEnriched = internalMutation({
     }),
   },
   handler: async (ctx, args) => {
+    // Extract linkedInId from URL for deduplication
+    const linkedInId = args.linkedInData.linkedInUrl
+      .match(/linkedin\.com\/in\/([^/?]+)/)?.[1] || undefined;
+
     await ctx.db.patch(args.founderId, {
       linkedInUrl: args.linkedInData.linkedInUrl,
+      linkedInId,
       headline: args.linkedInData.headline,
       location: args.linkedInData.location,
       profileImageUrl: args.linkedInData.profileImageUrl,
@@ -279,7 +284,7 @@ export const updateFounderEnriched = internalMutation({
       educationScore: args.scores.educationScore,
       experienceScore: args.scores.experienceScore,
       overallScore: args.scores.overallScore,
-      // New enrichment signals
+      // Enrichment signals
       isRepeatFounder: args.linkedInData.isRepeatFounder,
       isTechnicalFounder: args.linkedInData.isTechnicalFounder,
       previousExits: args.linkedInData.previousExits,

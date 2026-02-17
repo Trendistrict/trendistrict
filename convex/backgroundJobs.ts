@@ -331,7 +331,10 @@ async function runEnrichmentBatch(
             apiName: "exa",
           });
 
-          const searchQuery = `${founder.firstName} ${founder.lastName} site:linkedin.com/in`;
+          const nameQuery = `${founder.firstName} ${founder.lastName}`;
+          const searchQuery = startup.companyName
+            ? `${nameQuery} ${startup.companyName} site:linkedin.com/in`
+            : `${nameQuery} site:linkedin.com/in`;
           const response = await fetch("https://api.exa.ai/search", {
             method: "POST",
             headers: {
@@ -356,7 +359,15 @@ async function runEnrichmentBatch(
           }
 
           const data = await response.json();
-          const linkedInResult = data.results?.find((r: { url: string }) =>
+          // Find the best match — verify profile text contains the person's name
+          const firstLower = founder.firstName.toLowerCase();
+          const lastLower = founder.lastName.toLowerCase();
+
+          const linkedInResult = data.results?.find((r: { url: string; text?: string }) => {
+            if (!r.url.includes("linkedin.com/in/")) return false;
+            const text = (r.text || "").toLowerCase();
+            return text.includes(firstLower) && text.includes(lastLower);
+          }) || data.results?.find((r: { url: string }) =>
             r.url.includes("linkedin.com/in/")
           );
 
@@ -870,7 +881,10 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
   const yearMatches = text.match(/\b(19|20)\d{2}\b/g);
   if (yearMatches) {
     const years = yearMatches.map(Number).filter(y => y >= 1980 && y <= currentYear);
-    if (years.length >= 2) yearsOfExperience = currentYear - Math.min(...years);
+    if (years.length >= 2) {
+      const minYear = years.reduce((a, b) => Math.min(a, b));
+      yearsOfExperience = currentYear - minYear;
+    }
   }
 
   // Domain expertise detection
@@ -1007,7 +1021,7 @@ async function searchGitHubProfileBg(
     }
 
     return { url, username, repos, bio };
-  } catch { return null; }
+  } catch (error) { console.error("GitHub profile search error:", error); return null; }
 }
 
 async function searchTwitterProfileBg(
@@ -1049,7 +1063,7 @@ async function searchTwitterProfileBg(
     }
 
     return { url, handle, bio };
-  } catch { return null; }
+  } catch (error) { console.error("Twitter profile search error:", error); return null; }
 }
 
 // ============ DEEP COMPANY ENRICHMENT ============
@@ -1077,9 +1091,9 @@ async function enrichCompanyDeepBg(
   try {
     // Parallel Exa searches for different aspects
     const [generalResults, newsResults, fundingResults] = await Promise.all([
-      exaSearchBg(apiKey, `${companyName} UK startup company`, 5),
-      exaSearchBg(apiKey, `${companyName} startup news announcement`, 5, NEWS_DOMAINS_BG),
-      exaSearchBg(apiKey, `${companyName} startup funding raised investment`, 5),
+      exaSearchBg(apiKey, `"${companyName}" startup`, 5),
+      exaSearchBg(apiKey, `"${companyName}" startup news announcement`, 5, NEWS_DOMAINS_BG),
+      exaSearchBg(apiKey, `"${companyName}" funding raised investment`, 5),
     ]);
 
     const result: Record<string, unknown> = {};
@@ -1192,7 +1206,12 @@ async function enrichCompanyDeepBg(
             if (amountParts.length >= 1) {
               const numStr = amountParts.find(p => /\d/.test(p));
               const suffix = amountParts.find(p => /^(m|k|bn|million|billion)/i.test(p));
-              if (numStr) funding.amount = `£${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
+              if (numStr) {
+                // Preserve original currency symbol from the match
+                const currencyMatch = match[0].match(/[£$€]/);
+                const currency = currencyMatch ? currencyMatch[0] : "£";
+                funding.amount = `${currency}${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
+              }
             }
 
             const roundMatch = text.match(/(pre-seed|seed|series\s*[a-d])/i);
@@ -1243,7 +1262,7 @@ async function enrichCompanyDeepBg(
             result.productDescription = paragraphs[0].trim().substring(0, 500);
           }
         }
-      } catch { /* website fetch is best-effort */ }
+      } catch (error) { console.error("Website fetch error:", error); }
     }
 
     if (result.description || result.website || result.newsArticles || result.fundingDetails) {
@@ -1288,7 +1307,7 @@ async function exaSearchBg(
     if (!response.ok) return null;
     const data = await response.json();
     return data.results || null;
-  } catch { return null; }
+  } catch (error) { console.error("Exa search error:", error); return null; }
 }
 
 async function exaFetchUrlBg(
@@ -1299,12 +1318,12 @@ async function exaFetchUrlBg(
     const response = await fetch("https://api.exa.ai/contents", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-      body: JSON.stringify({ urls: [url], text: true }),
+      body: JSON.stringify({ urls: [url], contents: { text: true } }),
     });
     if (!response.ok) return null;
     const data = await response.json();
     return data.results?.[0] || null;
-  } catch { return null; }
+  } catch (error) { console.error("Exa fetch URL error:", error); return null; }
 }
 
 // ============ SCHEDULED VC DISCOVERY ============
