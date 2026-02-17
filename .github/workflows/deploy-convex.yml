@@ -2,7 +2,7 @@ name: Deploy Convex Backend
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   workflow_dispatch:
 
 jobs:
