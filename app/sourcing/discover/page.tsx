@@ -103,6 +103,7 @@ export default function DiscoverPage() {
     twitterFound: number;
     companiesEnriched: number;
     errors: string[];
+    fatalError?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -197,9 +198,17 @@ export default function DiscoverPage() {
         forceAll: true,
       });
       setReEnrichResults(result);
+      // If the action caught a fatal error internally, also show it as an error banner
+      if (result.fatalError) {
+        setError(`Action error: ${result.fatalError}`);
+      }
     } catch (err) {
       console.error("Re-enrichment error:", err);
-      setError(err instanceof Error ? err.message : "An error occurred during re-enrichment");
+      // Show the full error details — not just the generic message
+      const errorMsg = err instanceof Error
+        ? `${err.name}: ${err.message}${err.stack ? `\n${err.stack}` : ""}`
+        : String(err);
+      setError(errorMsg);
     } finally {
       setIsReEnriching(false);
     }
@@ -548,10 +557,21 @@ export default function DiscoverPage() {
                 <p className="text-sm text-muted-foreground">Companies Enriched</p>
               </div>
             </div>
+            {reEnrichResults.fatalError && (
+              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                <p className="text-sm font-medium text-red-500 mb-1">Fatal Error:</p>
+                <pre className="text-xs text-red-400 whitespace-pre-wrap overflow-auto max-h-48">{reEnrichResults.fatalError}</pre>
+              </div>
+            )}
             {reEnrichResults.errors.length > 0 && (
-              <p className="text-sm text-amber-500 mt-4">
-                {reEnrichResults.errors.length} errors occurred. Check console for details.
-              </p>
+              <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                <p className="text-sm font-medium text-amber-500 mb-1">{reEnrichResults.errors.length} errors:</p>
+                <ul className="text-xs text-amber-400 space-y-1">
+                  {reEnrichResults.errors.map((err, i) => (
+                    <li key={i}>{err}</li>
+                  ))}
+                </ul>
+              </div>
             )}
           </CardContent>
         </Card>

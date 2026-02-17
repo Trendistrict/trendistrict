@@ -5,6 +5,12 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { sleep, withRetry } from "./lib/rateLimiter";
 
+// Strip undefined values before passing to Convex mutations
+// (undefined is not a valid Convex value — optional fields must be absent)
+function cleanForConvex<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 // Daily limit for startups to discover (split across cron runs)
 const DISCOVERY_BATCH_SIZE = 5; // 20/4 runs per day = 5 per run
 
@@ -375,11 +381,11 @@ async function runEnrichmentBatch(
             const profileData = parseLinkedInContent(linkedInResult.url, linkedInResult.text || "");
             const scores = calculateFounderScore(profileData);
 
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, cleanForConvex({
               founderId: founder._id,
               linkedInData: profileData,
               scores,
-            });
+            }));
 
             foundersEnriched++;
 
@@ -395,13 +401,13 @@ async function runEnrichmentBatch(
         if (!founder.githubUrl) {
           const githubData = await searchGitHubProfileBg(exaApiKey, founder.firstName, founder.lastName);
           if (githubData) {
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, cleanForConvex({
               founderId: founder._id,
               githubUrl: githubData.url,
               githubUsername: githubData.username,
               githubRepos: githubData.repos,
               githubBio: githubData.bio,
-            });
+            }));
           }
           await sleep(500);
         }
@@ -410,12 +416,12 @@ async function runEnrichmentBatch(
         if (!founder.twitterUrl) {
           const twitterData = await searchTwitterProfileBg(exaApiKey, founder.firstName, founder.lastName);
           if (twitterData) {
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, cleanForConvex({
               founderId: founder._id,
               twitterUrl: twitterData.url,
               twitterHandle: twitterData.handle,
               twitterBio: twitterData.bio,
-            });
+            }));
           }
           await sleep(500);
         }
@@ -452,12 +458,12 @@ async function runEnrichmentBatch(
     const companyInfo = await enrichCompanyDeepBg(exaApiKey, startup.companyName);
 
     // Update startup with all enriched data
-    await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnriched, {
+    await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnriched, cleanForConvex({
       startupId: startup._id,
       isStealthFromLinkedIn: startupStealthFromLinkedIn,
       isRecentlyAnnounced: startupRecentlyAnnounced,
-      companyInfo: companyInfo ?? undefined,
-    });
+      ...(companyInfo ? { companyInfo } : {}),
+    }));
 
     startupsProcessed++;
 
