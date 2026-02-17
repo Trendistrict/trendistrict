@@ -84,6 +84,7 @@ const CATEGORY_GROUPS = [
 export default function DiscoverPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
+  const [isReEnriching, setIsReEnriching] = useState(false);
   const [results, setResults] = useState<{
     found: number;
     added: number;
@@ -95,6 +96,14 @@ export default function DiscoverPage() {
     stealthDetected: number;
     companiesEnriched: number;
   } | null>(null);
+  const [reEnrichResults, setReEnrichResults] = useState<{
+    startupsProcessed: number;
+    foundersEnriched: number;
+    githubFound: number;
+    twitterFound: number;
+    companiesEnriched: number;
+    errors: string[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [daysBack, setDaysBack] = useState("30");
@@ -104,6 +113,7 @@ export default function DiscoverPage() {
   const settings = useQuery(api.settings.get);
   const runAutoSourcing = useAction(api.autoSourcing.runAutoSourcing);
   const enrichDiscoveredStartups = useAction(api.autoSourcing.enrichDiscoveredStartups);
+  const reEnrichAllFounders = useAction(api.autoSourcing.reEnrichAllFounders);
 
   const handleRunSourcing = async () => {
     if (!settings?.companiesHouseApiKey) {
@@ -157,6 +167,7 @@ export default function DiscoverPage() {
     try {
       const result = await enrichDiscoveredStartups({
         exaApiKey: settings.exaApiKey,
+        crunchbaseApiKey: settings.crunchbaseApiKey,
         limit: 10,
       });
       setEnrichResults(result);
@@ -165,6 +176,32 @@ export default function DiscoverPage() {
       setError(err instanceof Error ? err.message : "An error occurred during enrichment");
     } finally {
       setIsEnriching(false);
+    }
+  };
+
+  const handleReEnrichAll = async () => {
+    if (!settings?.exaApiKey) {
+      setError("Please configure your Exa.ai API key in Settings first.");
+      return;
+    }
+
+    setIsReEnriching(true);
+    setError(null);
+    setReEnrichResults(null);
+
+    try {
+      const result = await reEnrichAllFounders({
+        exaApiKey: settings.exaApiKey,
+        crunchbaseApiKey: settings.crunchbaseApiKey,
+        limit: 50,
+        forceAll: true,
+      });
+      setReEnrichResults(result);
+    } catch (err) {
+      console.error("Re-enrichment error:", err);
+      setError(err instanceof Error ? err.message : "An error occurred during re-enrichment");
+    } finally {
+      setIsReEnriching(false);
     }
   };
 
@@ -436,17 +473,31 @@ export default function DiscoverPage() {
                 score founders based on top universities (Oxford, Cambridge, Stanford, etc.)
                 and high-growth company experience (Google, Stripe, Revolut, etc.).
               </p>
-              <Button
-                onClick={handleEnrichStartups}
-                disabled={isEnriching}
-              >
-                {isEnriching ? (
-                  <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <IconSparkles className="h-4 w-4 mr-2" />
-                )}
-                {isEnriching ? "Enriching Profiles..." : "Enrich Discovered Startups"}
-              </Button>
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleEnrichStartups}
+                  disabled={isEnriching || isReEnriching}
+                >
+                  {isEnriching ? (
+                    <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <IconSparkles className="h-4 w-4 mr-2" />
+                  )}
+                  {isEnriching ? "Enriching Profiles..." : "Enrich Discovered Startups"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleReEnrichAll}
+                  disabled={isEnriching || isReEnriching}
+                >
+                  {isReEnriching ? (
+                    <IconLoader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <IconSparkles className="h-4 w-4 mr-2" />
+                  )}
+                  {isReEnriching ? "Re-enriching All..." : "Re-enrich All Founders"}
+                </Button>
+              </div>
             </>
           ) : (
             <>
@@ -464,6 +515,47 @@ export default function DiscoverPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Re-Enrichment Results */}
+      {reEnrichResults && (
+        <Card className="border-blue-500/50 bg-blue-500/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <IconCheck className="h-5 w-5 text-blue-500" />
+              Re-Enrichment Complete
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{reEnrichResults.startupsProcessed}</p>
+                <p className="text-sm text-muted-foreground">Startups Processed</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{reEnrichResults.foundersEnriched}</p>
+                <p className="text-sm text-muted-foreground">Founders Enriched</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold text-purple-500">{reEnrichResults.githubFound}</p>
+                <p className="text-sm text-muted-foreground">GitHub Profiles</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold text-sky-500">{reEnrichResults.twitterFound}</p>
+                <p className="text-sm text-muted-foreground">Twitter Profiles</p>
+              </div>
+              <div className="text-center p-4 bg-background rounded-lg">
+                <p className="text-2xl font-bold">{reEnrichResults.companiesEnriched}</p>
+                <p className="text-sm text-muted-foreground">Companies Enriched</p>
+              </div>
+            </div>
+            {reEnrichResults.errors.length > 0 && (
+              <p className="text-sm text-amber-500 mt-4">
+                {reEnrichResults.errors.length} errors occurred. Check console for details.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Enrichment Results */}
       {enrichResults && (

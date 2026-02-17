@@ -1061,6 +1061,154 @@ export const enrichDiscoveredStartups = action({
   },
 });
 
+// Re-enrich ALL existing founders and startups (regardless of stage)
+// Use this to backfill new enrichment signals on existing data
+export const reEnrichAllFounders = action({
+  args: {
+    exaApiKey: v.string(),
+    crunchbaseApiKey: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    forceAll: v.optional(v.boolean()), // Re-enrich even if they already have LinkedIn data
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const userId = identity?.subject ?? DEFAULT_USER_ID;
+    const limit = args.limit ?? 50;
+
+    // Get ALL startups (not just "discovered")
+    const startups = await ctx.runQuery(internal.autoSourcingHelpers.getAllStartupsForReenrichment, {
+      userId,
+      limit,
+    });
+
+    const results = {
+      startupsProcessed: 0,
+      foundersEnriched: 0,
+      githubFound: 0,
+      twitterFound: 0,
+      companiesEnriched: 0,
+      errors: [] as string[],
+    };
+
+    for (const startup of startups) {
+      try {
+        const founders = await ctx.runQuery(internal.autoSourcingHelpers.getFoundersForStartup, {
+          startupId: startup._id,
+        });
+
+        let startupStealthFromLinkedIn = false;
+        let startupRecentlyAnnounced = false;
+
+        for (const founder of founders) {
+          // Skip if already fully enriched (unless forceAll)
+          if (!args.forceAll && founder.linkedInUrl && founder.founderTier && founder.githubUrl) {
+            continue;
+          }
+
+          try {
+            // LinkedIn enrichment (if missing or force re-enrich)
+            if (!founder.linkedInUrl || !founder.founderTier || args.forceAll) {
+              const profile = await searchLinkedInProfileWithExa(
+                args.exaApiKey,
+                founder.firstName,
+                founder.lastName
+              );
+
+              if (profile) {
+                const scores = calculateFounderScore(profile);
+
+                await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+                  founderId: founder._id,
+                  linkedInData: profile,
+                  scores,
+                });
+
+                results.foundersEnriched++;
+
+                if (profile.isStealthMode) startupStealthFromLinkedIn = true;
+                if (profile.isRecentlyAnnounced) startupRecentlyAnnounced = true;
+              }
+            }
+
+            // GitHub enrichment (if missing)
+            if (!founder.githubUrl) {
+              const githubData = await searchGitHubProfile(
+                args.exaApiKey,
+                founder.firstName,
+                founder.lastName
+              );
+              if (githubData) {
+                await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+                  founderId: founder._id,
+                  githubUrl: githubData.url,
+                  githubUsername: githubData.username,
+                  githubRepos: githubData.repos,
+                  githubBio: githubData.bio,
+                });
+                results.githubFound++;
+              }
+            }
+
+            // Twitter enrichment (if missing)
+            if (!founder.twitterUrl) {
+              const twitterData = await searchTwitterProfile(
+                args.exaApiKey,
+                founder.firstName,
+                founder.lastName
+              );
+              if (twitterData) {
+                await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+                  founderId: founder._id,
+                  twitterUrl: twitterData.url,
+                  twitterHandle: twitterData.handle,
+                  twitterBio: twitterData.bio,
+                });
+                results.twitterFound++;
+              }
+            }
+          } catch (error) {
+            const msg = `Founder ${founder.firstName} ${founder.lastName}: ${error instanceof Error ? error.message : "unknown error"}`;
+            results.errors.push(msg);
+            console.error(msg);
+          }
+        }
+
+        // Deep company enrichment
+        const companyInfo = await enrichCompanyDeep(args.exaApiKey, startup.companyName);
+
+        if (args.crunchbaseApiKey) {
+          const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
+          if (crunchbaseData) {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
+              startupId: startup._id,
+              crunchbaseData,
+            });
+          }
+        }
+
+        // Update startup — but DON'T change stage (preserve current stage)
+        await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnrichedPreserveStage, {
+          startupId: startup._id,
+          isStealthFromLinkedIn: startupStealthFromLinkedIn,
+          isRecentlyAnnounced: startupRecentlyAnnounced,
+          companyInfo: companyInfo ?? undefined,
+        });
+
+        if (companyInfo) results.companiesEnriched++;
+        results.startupsProcessed++;
+
+        console.log(`Re-enriched startup ${startup.companyName} (${results.startupsProcessed}/${startups.length})`);
+      } catch (error) {
+        const msg = `Startup ${startup.companyName}: ${error instanceof Error ? error.message : "unknown error"}`;
+        results.errors.push(msg);
+        console.error(msg);
+      }
+    }
+
+    return results;
+  },
+});
+
 // ============ GITHUB PROFILE DISCOVERY ============
 
 async function searchGitHubProfile(

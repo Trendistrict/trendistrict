@@ -157,6 +157,46 @@ export const getStartupsNeedingEnrichment = internalQuery({
   },
 });
 
+// Get ALL startups for re-enrichment (regardless of stage)
+export const getAllStartupsForReenrichment = internalQuery({
+  args: {
+    userId: v.string(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("startups")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .take(args.limit);
+  },
+});
+
+// Get founders needing enrichment (no LinkedIn data yet or missing new signals)
+export const getFoundersNeedingReenrichment = internalQuery({
+  args: {
+    userId: v.string(),
+    limit: v.number(),
+    forceAll: v.optional(v.boolean()), // Re-enrich even if they have LinkedIn data
+  },
+  handler: async (ctx, args) => {
+    const allFounders = await ctx.db
+      .query("founders")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .take(args.limit * 3); // Overfetch to filter
+
+    if (args.forceAll) {
+      return allFounders.slice(0, args.limit);
+    }
+
+    // Filter to those missing enrichment data
+    return allFounders
+      .filter(f => !f.linkedInUrl || !f.founderTier || !f.githubUrl)
+      .slice(0, args.limit);
+  },
+});
+
 // Get founders for a startup
 export const getFoundersForStartup = internalQuery({
   args: {
@@ -440,5 +480,110 @@ export const updateStartupCrunchbase = internalMutation({
     }
 
     await ctx.db.patch(args.startupId, patch);
+  },
+});
+
+// Same as updateStartupEnriched but preserves the current stage (for re-enrichment)
+export const updateStartupEnrichedPreserveStage = internalMutation({
+  args: {
+    startupId: v.id("startups"),
+    isStealthFromLinkedIn: v.boolean(),
+    isRecentlyAnnounced: v.boolean(),
+    companyInfo: v.optional(
+      v.object({
+        description: v.optional(v.string()),
+        website: v.optional(v.string()),
+        productDescription: v.optional(v.string()),
+        businessModel: v.optional(v.string()),
+        techStack: v.optional(v.array(v.string())),
+        teamSize: v.optional(v.string()),
+        newsArticles: v.optional(v.array(v.object({
+          title: v.string(),
+          url: v.string(),
+          source: v.optional(v.string()),
+          date: v.optional(v.string()),
+        }))),
+        fundingDetails: v.optional(v.array(v.object({
+          round: v.optional(v.string()),
+          amount: v.optional(v.string()),
+          date: v.optional(v.string()),
+          investors: v.optional(v.array(v.string())),
+        }))),
+        crunchbaseUrl: v.optional(v.string()),
+        funding: v.optional(v.string()),
+        news: v.optional(v.array(v.string())),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const startup = await ctx.db.get(args.startupId);
+    if (!startup) return;
+
+    // Calculate team score
+    const founders = await ctx.db
+      .query("founders")
+      .filter((q) => q.eq(q.field("startupId"), args.startupId))
+      .collect();
+
+    const founderScores = founders
+      .map((f) => f.overallScore)
+      .filter((s): s is number => s !== undefined);
+
+    const teamScore =
+      founderScores.length > 0
+        ? Math.round(founderScores.reduce((a, b) => a + b, 0) / founderScores.length)
+        : undefined;
+
+    // Traction score
+    let tractionScore = 0;
+    const info = args.companyInfo;
+    if (info) {
+      if (info.website) tractionScore += 15;
+      if (info.newsArticles && info.newsArticles.length > 0) tractionScore += 20;
+      if (info.newsArticles && info.newsArticles.length >= 3) tractionScore += 10;
+      if (info.fundingDetails && info.fundingDetails.length > 0) tractionScore += 25;
+      if (info.teamSize) {
+        tractionScore += info.teamSize === "1-10" ? 5 : info.teamSize === "11-50" ? 15 : 20;
+      }
+      if (info.techStack && info.techStack.length > 0) tractionScore += 5;
+      if (info.productDescription) tractionScore += 10;
+    }
+    tractionScore = Math.min(100, tractionScore);
+
+    // Funding stage
+    let fundingStage = startup.fundingStage;
+    let estimatedFunding = startup.estimatedFunding;
+    if (info?.fundingDetails && info.fundingDetails.length > 0) {
+      const rounds = info.fundingDetails.map(f => f.round).filter(Boolean) as string[];
+      const roundOrder = ["pre-seed", "seed", "series-a", "series-b", "series-c", "series-d"];
+      for (const round of roundOrder.reverse()) {
+        if (rounds.some(r => r.includes(round))) { fundingStage = round; break; }
+      }
+      const amounts = info.fundingDetails.map(f => f.amount).filter(Boolean) as string[];
+      if (amounts.length > 0) estimatedFunding = amounts[amounts.length - 1];
+    }
+
+    await ctx.db.patch(args.startupId, {
+      isStealthMode: startup.isStealthMode || args.isStealthFromLinkedIn,
+      recentlyAnnounced: startup.recentlyAnnounced || args.isRecentlyAnnounced,
+      description: info?.description || startup.description,
+      website: info?.website || startup.website,
+      productDescription: info?.productDescription,
+      businessModel: info?.businessModel,
+      techStack: info?.techStack,
+      teamSize: info?.teamSize,
+      newsArticles: info?.newsArticles,
+      fundingDetails: info?.fundingDetails,
+      crunchbaseUrl: info?.crunchbaseUrl,
+      fundingStage,
+      estimatedFunding,
+      notes: info?.description
+        ? `${startup.notes || ""}\n\n${info.description}`.trim()
+        : startup.notes,
+      teamScore,
+      tractionScore: tractionScore > 0 ? tractionScore : undefined,
+      enrichedAt: Date.now(),
+      // NOTE: stage is NOT changed — preserves current pipeline state
+    });
   },
 });
