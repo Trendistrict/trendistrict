@@ -193,7 +193,7 @@ export default function DiscoverPage() {
       const result = await reEnrichAllFounders({
         exaApiKey: settings.exaApiKey,
         crunchbaseApiKey: settings.crunchbaseApiKey,
-        limit: 50,
+        limit: 5,
         forceAll: true,
       });
       setReEnrichResults(result);
@@ -495,7 +495,7 @@ export default function DiscoverPage() {
                   ) : (
                     <IconSparkles className="h-4 w-4 mr-2" />
                   )}
-                  {isReEnriching ? "Re-enriching All..." : "Re-enrich All Founders"}
+                  {isReEnriching ? "Re-enriching batch..." : "Re-enrich Next 5"}
                 </Button>
               </div>
             </>

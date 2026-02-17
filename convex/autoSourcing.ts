@@ -5,6 +5,11 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { DEFAULT_USER_ID } from "./authHelpers";
 
+// Small delay between API calls to avoid rate limiting
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Comprehensive SIC code categories for different startup verticals
 const SIC_CODE_CATEGORIES = {
   // Software & SaaS
@@ -953,7 +958,6 @@ export const enrichDiscoveredStartups = action({
 
     for (const startup of startups) {
       try {
-        // Get founders for this startup
         const founders = await ctx.runQuery(internal.autoSourcingHelpers.getFoundersForStartup, {
           startupId: startup._id,
         });
@@ -962,80 +966,86 @@ export const enrichDiscoveredStartups = action({
         let startupRecentlyAnnounced = false;
 
         for (const founder of founders) {
-          // Search for LinkedIn profile
-          const profile = await searchLinkedInProfileWithExa(
-            args.exaApiKey,
-            founder.firstName,
-            founder.lastName
-          );
+          try {
+            // LinkedIn enrichment with rate limiting
+            await delay(500);
+            const profile = await searchLinkedInProfileWithExa(
+              args.exaApiKey,
+              founder.firstName,
+              founder.lastName
+            );
 
-          if (profile) {
-            // Calculate scores
-            const scores = calculateFounderScore(profile);
-
-            // Update founder with enriched data
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
-              founderId: founder._id,
-              linkedInData: profile,
-              scores,
-            });
-
-            results.foundersEnriched++;
-
-            // Track stealth signals from any founder
-            if (profile.isStealthMode) {
-              startupStealthFromLinkedIn = true;
-              results.stealthDetected++;
+            if (profile) {
+              const scores = calculateFounderScore(profile);
+              await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
+                founderId: founder._id,
+                linkedInData: profile,
+                scores,
+              });
+              results.foundersEnriched++;
+              if (profile.isStealthMode) {
+                startupStealthFromLinkedIn = true;
+                results.stealthDetected++;
+              }
+              if (profile.isRecentlyAnnounced) {
+                startupRecentlyAnnounced = true;
+              }
             }
-            if (profile.isRecentlyAnnounced) {
-              startupRecentlyAnnounced = true;
+
+            // GitHub enrichment
+            await delay(500);
+            const githubData = await searchGitHubProfile(
+              args.exaApiKey,
+              founder.firstName,
+              founder.lastName
+            );
+            if (githubData) {
+              await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+                founderId: founder._id,
+                githubUrl: githubData.url,
+                githubUsername: githubData.username,
+                githubRepos: githubData.repos,
+                githubBio: githubData.bio,
+              });
             }
-          }
 
-          // Search for GitHub profile
-          const githubData = await searchGitHubProfile(
-            args.exaApiKey,
-            founder.firstName,
-            founder.lastName
-          );
-          if (githubData) {
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
-              founderId: founder._id,
-              githubUrl: githubData.url,
-              githubUsername: githubData.username,
-              githubRepos: githubData.repos,
-              githubBio: githubData.bio,
-            });
-          }
-
-          // Search for Twitter/X profile
-          const twitterData = await searchTwitterProfile(
-            args.exaApiKey,
-            founder.firstName,
-            founder.lastName
-          );
-          if (twitterData) {
-            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
-              founderId: founder._id,
-              twitterUrl: twitterData.url,
-              twitterHandle: twitterData.handle,
-              twitterBio: twitterData.bio,
-            });
+            // Twitter enrichment
+            await delay(500);
+            const twitterData = await searchTwitterProfile(
+              args.exaApiKey,
+              founder.firstName,
+              founder.lastName
+            );
+            if (twitterData) {
+              await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+                founderId: founder._id,
+                twitterUrl: twitterData.url,
+                twitterHandle: twitterData.handle,
+                twitterBio: twitterData.bio,
+              });
+            }
+          } catch (error) {
+            console.error(`Error enriching founder ${founder.firstName} ${founder.lastName}:`, error);
           }
         }
 
-        // Deep company enrichment via Exa (company info + website + funding + news)
+        // Deep company enrichment (3 parallel Exa calls internally)
+        await delay(500);
         const companyInfo = await enrichCompanyDeep(args.exaApiKey, startup.companyName);
 
         // Crunchbase enrichment (if API key provided)
         if (args.crunchbaseApiKey) {
-          const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
-          if (crunchbaseData && companyInfo) {
-            // Merge Crunchbase data into company info for the startup update
-            await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
-              startupId: startup._id,
-              crunchbaseData,
-            });
+          try {
+            await delay(300);
+            const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
+            if (crunchbaseData) {
+              await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
+                startupId: startup._id,
+                crunchbaseData,
+              });
+            }
+          } catch (error) {
+            console.error(`Crunchbase error for ${startup.companyName}:`, error);
           }
         }
 
@@ -1052,6 +1062,7 @@ export const enrichDiscoveredStartups = action({
         }
 
         results.startupsProcessed++;
+        console.log(`Enriched startup ${startup.companyName} (${results.startupsProcessed}/${startups.length})`);
       } catch (error) {
         console.error(`Error enriching startup ${startup._id}:`, error);
       }
@@ -1062,23 +1073,23 @@ export const enrichDiscoveredStartups = action({
 });
 
 // Re-enrich ALL existing founders and startups (regardless of stage)
-// Use this to backfill new enrichment signals on existing data
+// Processes in small batches to avoid Convex action timeout (~2 min)
 export const reEnrichAllFounders = action({
   args: {
     exaApiKey: v.string(),
     crunchbaseApiKey: v.optional(v.string()),
     limit: v.optional(v.number()),
-    forceAll: v.optional(v.boolean()), // Re-enrich even if they already have LinkedIn data
+    forceAll: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const userId = identity?.subject ?? DEFAULT_USER_ID;
-    const limit = args.limit ?? 50;
+    // Process max 5 startups per action call to stay within timeout
+    const batchSize = Math.min(args.limit ?? 5, 5);
 
-    // Get ALL startups (not just "discovered")
     const startups = await ctx.runQuery(internal.autoSourcingHelpers.getAllStartupsForReenrichment, {
       userId,
-      limit,
+      limit: batchSize,
     });
 
     const results = {
@@ -1100,14 +1111,14 @@ export const reEnrichAllFounders = action({
         let startupRecentlyAnnounced = false;
 
         for (const founder of founders) {
-          // Skip if already fully enriched (unless forceAll)
           if (!args.forceAll && founder.linkedInUrl && founder.founderTier && founder.githubUrl) {
             continue;
           }
 
           try {
-            // LinkedIn enrichment (if missing or force re-enrich)
+            // LinkedIn enrichment
             if (!founder.linkedInUrl || !founder.founderTier || args.forceAll) {
+              await delay(500); // Rate limit protection
               const profile = await searchLinkedInProfileWithExa(
                 args.exaApiKey,
                 founder.firstName,
@@ -1116,22 +1127,20 @@ export const reEnrichAllFounders = action({
 
               if (profile) {
                 const scores = calculateFounderScore(profile);
-
                 await ctx.runMutation(internal.autoSourcingHelpers.updateFounderEnriched, {
                   founderId: founder._id,
                   linkedInData: profile,
                   scores,
                 });
-
                 results.foundersEnriched++;
-
                 if (profile.isStealthMode) startupStealthFromLinkedIn = true;
                 if (profile.isRecentlyAnnounced) startupRecentlyAnnounced = true;
               }
             }
 
-            // GitHub enrichment (if missing)
+            // GitHub enrichment
             if (!founder.githubUrl) {
+              await delay(500);
               const githubData = await searchGitHubProfile(
                 args.exaApiKey,
                 founder.firstName,
@@ -1149,8 +1158,9 @@ export const reEnrichAllFounders = action({
               }
             }
 
-            // Twitter enrichment (if missing)
+            // Twitter enrichment
             if (!founder.twitterUrl) {
+              await delay(500);
               const twitterData = await searchTwitterProfile(
                 args.exaApiKey,
                 founder.firstName,
@@ -1173,20 +1183,26 @@ export const reEnrichAllFounders = action({
           }
         }
 
-        // Deep company enrichment
+        // Deep company enrichment (3 parallel Exa calls internally)
+        await delay(500);
         const companyInfo = await enrichCompanyDeep(args.exaApiKey, startup.companyName);
 
         if (args.crunchbaseApiKey) {
-          const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
-          if (crunchbaseData) {
-            await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
-              startupId: startup._id,
-              crunchbaseData,
-            });
+          try {
+            await delay(300);
+            const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
+            if (crunchbaseData) {
+              await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
+                startupId: startup._id,
+                crunchbaseData,
+              });
+            }
+          } catch (error) {
+            console.error(`Crunchbase error for ${startup.companyName}:`, error);
           }
         }
 
-        // Update startup — but DON'T change stage (preserve current stage)
+        // Update startup — preserve current pipeline stage
         await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnrichedPreserveStage, {
           startupId: startup._id,
           isStealthFromLinkedIn: startupStealthFromLinkedIn,
