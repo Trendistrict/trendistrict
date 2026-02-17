@@ -34,6 +34,36 @@ export default defineSchema({
     fundingStage: v.optional(v.string()), // pre-seed, seed, series-a
     estimatedFunding: v.optional(v.string()),
 
+    // Company enrichment
+    website: v.optional(v.string()),
+    description: v.optional(v.string()),
+    productDescription: v.optional(v.string()), // Extracted from website
+    businessModel: v.optional(v.string()), // B2B, B2C, etc.
+    techStack: v.optional(v.array(v.string())), // Detected technologies
+    teamSize: v.optional(v.string()), // Estimated from LinkedIn/website
+    newsArticles: v.optional(v.array(v.object({
+      title: v.string(),
+      url: v.string(),
+      source: v.optional(v.string()),
+      date: v.optional(v.string()),
+    }))),
+    fundingDetails: v.optional(v.array(v.object({
+      round: v.optional(v.string()), // "seed", "series-a"
+      amount: v.optional(v.string()), // "$2M"
+      date: v.optional(v.string()),
+      investors: v.optional(v.array(v.string())),
+    }))),
+    crunchbaseUrl: v.optional(v.string()),
+    crunchbaseData: v.optional(v.object({
+      totalFunding: v.optional(v.string()),
+      lastRound: v.optional(v.string()),
+      lastRoundDate: v.optional(v.string()),
+      investors: v.optional(v.array(v.string())),
+      employeeCount: v.optional(v.string()),
+      categories: v.optional(v.array(v.string())),
+    })),
+    enrichedAt: v.optional(v.number()),
+
     // Scoring
     overallScore: v.optional(v.number()), // 0-100
     teamScore: v.optional(v.number()),
@@ -62,6 +92,16 @@ export default defineSchema({
     profileImageUrl: v.optional(v.string()),
     headline: v.optional(v.string()),
     location: v.optional(v.string()),
+
+    // Social profiles
+    githubUrl: v.optional(v.string()),
+    githubUsername: v.optional(v.string()),
+    githubRepos: v.optional(v.number()), // Public repo count
+    githubBio: v.optional(v.string()),
+    twitterUrl: v.optional(v.string()),
+    twitterHandle: v.optional(v.string()),
+    twitterBio: v.optional(v.string()),
+    personalWebsite: v.optional(v.string()),
 
     // Role
     role: v.optional(v.string()), // CEO, CTO, Co-founder

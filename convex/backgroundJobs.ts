@@ -316,6 +316,9 @@ async function runEnrichmentBatch(
       startupId: startup._id,
     });
 
+    let startupStealthFromLinkedIn = false;
+    let startupRecentlyAnnounced = false;
+
     for (const founder of founders) {
       // Skip if already fully enriched (has LinkedIn, score, AND email)
       if (founder.linkedInUrl && founder.overallScore && founder.email) continue;
@@ -368,12 +371,45 @@ async function runEnrichmentBatch(
             });
 
             foundersEnriched++;
+
+            // Track stealth signals
+            if (profileData.isStealthMode) startupStealthFromLinkedIn = true;
+            if (profileData.isRecentlyAnnounced) startupRecentlyAnnounced = true;
           }
 
           await sleep(1000);
         }
 
-        // --- Step 2: Email discovery via Apollo People Match ---
+        // --- Step 2: GitHub profile discovery via Exa ---
+        if (!founder.githubUrl) {
+          const githubData = await searchGitHubProfileBg(exaApiKey, founder.firstName, founder.lastName);
+          if (githubData) {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+              founderId: founder._id,
+              githubUrl: githubData.url,
+              githubUsername: githubData.username,
+              githubRepos: githubData.repos,
+              githubBio: githubData.bio,
+            });
+          }
+          await sleep(500);
+        }
+
+        // --- Step 3: Twitter/X profile discovery via Exa ---
+        if (!founder.twitterUrl) {
+          const twitterData = await searchTwitterProfileBg(exaApiKey, founder.firstName, founder.lastName);
+          if (twitterData) {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+              founderId: founder._id,
+              twitterUrl: twitterData.url,
+              twitterHandle: twitterData.handle,
+              twitterBio: twitterData.bio,
+            });
+          }
+          await sleep(500);
+        }
+
+        // --- Step 4: Email discovery via Apollo People Match ---
         if (!founder.email && settings?.apolloApiKey) {
           const email = await discoverFounderEmail(
             founder.firstName,
@@ -401,10 +437,15 @@ async function runEnrichmentBatch(
       }
     }
 
-    // Move startup to researching stage after enrichment
-    await ctx.runMutation(internal.backgroundJobsDb.updateStartupStage, {
+    // --- Step 5: Deep company enrichment ---
+    const companyInfo = await enrichCompanyDeepBg(exaApiKey, startup.companyName);
+
+    // Update startup with all enriched data
+    await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnriched, {
       startupId: startup._id,
-      stage: "researching",
+      isStealthFromLinkedIn: startupStealthFromLinkedIn,
+      isRecentlyAnnounced: startupRecentlyAnnounced,
+      companyInfo: companyInfo ?? undefined,
     });
 
     startupsProcessed++;
@@ -920,6 +961,352 @@ function calculateFounderScore(profile: LinkedInProfile): {
   return { educationScore, experienceScore, overallScore, founderTier };
 }
 
+// ============ SOCIAL PROFILE DISCOVERY ============
+
+async function searchGitHubProfileBg(
+  apiKey: string,
+  firstName: string,
+  lastName: string
+): Promise<{ url: string; username: string; repos?: number; bio?: string } | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({
+        query: `${firstName} ${lastName} software developer`,
+        numResults: 3,
+        includeDomains: ["github.com"],
+        type: "neural",
+        contents: { text: true },
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+
+    const profileResult = data.results?.find((r: { url: string }) => {
+      const match = r.url.match(/github\.com\/([^/]+)\/?$/);
+      return match && !["topics", "explore", "trending", "search"].includes(match[1]);
+    });
+
+    if (!profileResult) return null;
+    const url = profileResult.url;
+    const username = url.match(/github\.com\/([^/]+)/)?.[1] || "";
+    const text = (profileResult.text || "").toLowerCase();
+
+    let repos: number | undefined;
+    const repoMatch = text.match(/(\d+)\s*repositor/i);
+    if (repoMatch) repos = parseInt(repoMatch[1]);
+
+    const lines = (profileResult.text || "").split("\n").filter((l: string) => l.trim());
+    let bio: string | undefined;
+    for (const line of lines.slice(0, 5)) {
+      if (line.length > 20 && line.length < 200 && !line.includes("github.com")) {
+        bio = line.trim(); break;
+      }
+    }
+
+    return { url, username, repos, bio };
+  } catch { return null; }
+}
+
+async function searchTwitterProfileBg(
+  apiKey: string,
+  firstName: string,
+  lastName: string
+): Promise<{ url: string; handle: string; bio?: string } | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({
+        query: `${firstName} ${lastName} founder startup`,
+        numResults: 3,
+        includeDomains: ["twitter.com", "x.com"],
+        type: "neural",
+        contents: { text: true },
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+
+    const profileResult = data.results?.find((r: { url: string }) =>
+      /(?:twitter\.com|x\.com)\/[^/]+\/?$/.test(r.url) &&
+      !r.url.includes("/status/") && !r.url.includes("/search")
+    );
+
+    if (!profileResult) return null;
+    const url = profileResult.url;
+    const handle = url.match(/(?:twitter\.com|x\.com)\/([^/]+)/)?.[1] || "";
+
+    const lines = (profileResult.text || "").split("\n").filter((l: string) => l.trim());
+    let bio: string | undefined;
+    for (const line of lines.slice(0, 5)) {
+      if (line.length > 15 && line.length < 200 && !line.includes("twitter.com") && !line.includes("x.com")) {
+        bio = line.trim(); break;
+      }
+    }
+
+    return { url, handle, bio };
+  } catch { return null; }
+}
+
+// ============ DEEP COMPANY ENRICHMENT ============
+
+const NEWS_DOMAINS_BG = [
+  "techcrunch.com", "sifted.eu", "bloomberg.com", "reuters.com",
+  "ft.com", "wired.com", "venturebeat.com", "eu-startups.com",
+  "uktech.news", "startups.co.uk", "forbes.com",
+];
+
+async function enrichCompanyDeepBg(
+  apiKey: string,
+  companyName: string
+): Promise<{
+  description?: string;
+  website?: string;
+  productDescription?: string;
+  businessModel?: string;
+  techStack?: string[];
+  teamSize?: string;
+  newsArticles?: Array<{ title: string; url: string; source?: string; date?: string }>;
+  fundingDetails?: Array<{ round?: string; amount?: string; date?: string; investors?: string[] }>;
+  crunchbaseUrl?: string;
+} | null> {
+  try {
+    // Parallel Exa searches for different aspects
+    const [generalResults, newsResults, fundingResults] = await Promise.all([
+      exaSearchBg(apiKey, `${companyName} UK startup company`, 5),
+      exaSearchBg(apiKey, `${companyName} startup news announcement`, 5, NEWS_DOMAINS_BG),
+      exaSearchBg(apiKey, `${companyName} startup funding raised investment`, 5),
+    ]);
+
+    const result: Record<string, unknown> = {};
+
+    // Tech stack keywords
+    const TECH_KEYWORDS: Record<string, string> = {
+      "react": "React", "next.js": "Next.js", "vue": "Vue.js", "angular": "Angular",
+      "node.js": "Node.js", "python": "Python", "typescript": "TypeScript",
+      "kubernetes": "Kubernetes", "docker": "Docker", "aws": "AWS",
+      "gcp": "Google Cloud", "azure": "Azure", "graphql": "GraphQL",
+      "postgresql": "PostgreSQL", "mongodb": "MongoDB", "redis": "Redis",
+      "openai": "OpenAI", "pytorch": "PyTorch", "tensorflow": "TensorFlow",
+    };
+
+    // Process general results
+    const techStack: string[] = [];
+    if (generalResults) {
+      for (const item of generalResults) {
+        const url = item.url || "";
+        const text = item.text || "";
+
+        // Find company website
+        if (!result.website && url.length > 0 &&
+          !url.includes("linkedin") && !url.includes("twitter") && !url.includes("x.com") &&
+          !url.includes("crunchbase") && !url.includes("companieshouse") &&
+          !NEWS_DOMAINS_BG.some(d => url.includes(d))) {
+          result.website = url;
+        }
+
+        if (url.includes("crunchbase.com") && !result.crunchbaseUrl) {
+          result.crunchbaseUrl = url;
+        }
+
+        if (!result.description && text.length > 50) {
+          result.description = text.substring(0, 500);
+        }
+
+        // Tech stack detection
+        const textLower = text.toLowerCase();
+        for (const [kw, label] of Object.entries(TECH_KEYWORDS)) {
+          if (textLower.includes(kw) && !techStack.includes(label)) techStack.push(label);
+        }
+
+        // Business model detection
+        if (!result.businessModel && text.length > 30) {
+          const tl = text.toLowerCase();
+          if (tl.includes("b2b") || tl.includes("enterprise")) result.businessModel = "B2B";
+          else if (tl.includes("b2c") || tl.includes("consumer")) result.businessModel = "B2C";
+          else if (tl.includes("marketplace")) result.businessModel = "Marketplace";
+          else if (tl.includes("d2c") || tl.includes("dtc")) result.businessModel = "DTC";
+        }
+
+        // Team size detection
+        if (!result.teamSize && text.length > 30) {
+          const sizeMatch = text.match(/(\d+)\s*(?:employees?|team\s*members?|people)/i);
+          if (sizeMatch) {
+            const count = parseInt(sizeMatch[1]);
+            if (count >= 1 && count <= 10000) {
+              result.teamSize = count <= 10 ? "1-10" : count <= 50 ? "11-50" :
+                count <= 200 ? "51-200" : count <= 500 ? "201-500" : "500+";
+            }
+          }
+        }
+      }
+    }
+    if (techStack.length > 0) result.techStack = techStack;
+
+    // Process news
+    const newsArticles: Array<{ title: string; url: string; source?: string; date?: string }> = [];
+    if (newsResults) {
+      for (const item of newsResults) {
+        const url = item.url || "";
+        const title = item.title || "";
+        if (!title && !url) continue;
+
+        let source: string | undefined;
+        for (const domain of NEWS_DOMAINS_BG) {
+          if (url.includes(domain)) {
+            source = domain.split(".")[0];
+            source = source.charAt(0).toUpperCase() + source.slice(1);
+            break;
+          }
+        }
+
+        const dateMatch = (item.publishedDate || item.text || "").match(/\d{4}-\d{2}-\d{2}/);
+        newsArticles.push({ title: title.substring(0, 200), url, source, date: dateMatch?.[0] });
+      }
+      if (newsArticles.length > 0) result.newsArticles = newsArticles.slice(0, 5);
+    }
+
+    // Process funding
+    const fundingDetails: Array<{ round?: string; amount?: string; date?: string; investors?: string[] }> = [];
+    if (fundingResults) {
+      for (const item of fundingResults) {
+        const text = item.text || "";
+        if (text.length < 20) continue;
+
+        // Extract funding amounts
+        const fundingPatterns = [
+          /(?:raised?|secures?|closes?)\s+(?:£|\$|€)(\d+(?:\.\d+)?)\s*(m(?:illion)?|k|bn|billion)?/gi,
+          /(?:£|\$|€)(\d+(?:\.\d+)?)\s*(m(?:illion)?|k|bn|billion)?\s+(?:seed|series\s*[a-d]|pre-seed|round|funding)/gi,
+        ];
+
+        for (const pattern of fundingPatterns) {
+          pattern.lastIndex = 0;
+          let match;
+          while ((match = pattern.exec(text)) !== null) {
+            const funding: { round?: string; amount?: string; date?: string; investors?: string[] } = {};
+            const amountParts = match.slice(1).filter(Boolean);
+            if (amountParts.length >= 1) {
+              const numStr = amountParts.find(p => /\d/.test(p));
+              const suffix = amountParts.find(p => /^(m|k|bn|million|billion)/i.test(p));
+              if (numStr) funding.amount = `£${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
+            }
+
+            const roundMatch = text.match(/(pre-seed|seed|series\s*[a-d])/i);
+            if (roundMatch) funding.round = roundMatch[1].toLowerCase().replace(/\s+/g, "-");
+
+            const dateMatch = text.match(/\b(20\d{2})\b/);
+            if (dateMatch) funding.date = dateMatch[1];
+
+            if (funding.amount || funding.round) fundingDetails.push(funding);
+          }
+        }
+
+        // Extract investors
+        const investorPattern = /(?:led by|from|backed by)\s+([A-Z][a-zA-Z\s&]+(?:Capital|Ventures|Partners|VC|Fund))/gi;
+        investorPattern.lastIndex = 0;
+        let investorMatch;
+        while ((investorMatch = investorPattern.exec(text)) !== null) {
+          const name = investorMatch[1].trim();
+          if (name.length > 3 && name.length < 60) {
+            if (fundingDetails.length > 0) {
+              const last = fundingDetails[fundingDetails.length - 1];
+              last.investors = [...(last.investors || []), name];
+            } else {
+              fundingDetails.push({ investors: [name] });
+            }
+          }
+        }
+      }
+
+      if (fundingDetails.length > 0) {
+        const seen = new Set<string>();
+        result.fundingDetails = fundingDetails.filter(f => {
+          const key = `${f.round || ""}-${f.amount || ""}`;
+          if (seen.has(key) && key !== "-") return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 5);
+      }
+    }
+
+    // Fetch website content for product description
+    if (result.website) {
+      try {
+        const websiteContent = await exaFetchUrlBg(apiKey, result.website as string);
+        if (websiteContent) {
+          const paragraphs = websiteContent.text.split("\n").filter((p: string) => p.trim().length > 40);
+          if (paragraphs.length > 0) {
+            result.productDescription = paragraphs[0].trim().substring(0, 500);
+          }
+        }
+      } catch { /* website fetch is best-effort */ }
+    }
+
+    if (result.description || result.website || result.newsArticles || result.fundingDetails) {
+      return result as {
+        description?: string;
+        website?: string;
+        productDescription?: string;
+        businessModel?: string;
+        techStack?: string[];
+        teamSize?: string;
+        newsArticles?: Array<{ title: string; url: string; source?: string; date?: string }>;
+        fundingDetails?: Array<{ round?: string; amount?: string; date?: string; investors?: string[] }>;
+        crunchbaseUrl?: string;
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Error in deep company enrichment:", error);
+    return null;
+  }
+}
+
+async function exaSearchBg(
+  apiKey: string,
+  query: string,
+  numResults: number,
+  includeDomains?: string[],
+): Promise<Array<{ url: string; text: string; title: string; publishedDate?: string }> | null> {
+  try {
+    const body: Record<string, unknown> = {
+      query, numResults, type: "neural", useAutoprompt: true, contents: { text: true },
+    };
+    if (includeDomains && includeDomains.length > 0) body.includeDomains = includeDomains;
+
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.results || null;
+  } catch { return null; }
+}
+
+async function exaFetchUrlBg(
+  apiKey: string,
+  url: string
+): Promise<{ text: string } | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({ urls: [url], text: true }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.results?.[0] || null;
+  } catch { return null; }
+}
+
 // ============ SCHEDULED VC DISCOVERY ============
 
 export const runScheduledVcDiscovery = internalAction({
@@ -1014,6 +1401,9 @@ export const runAutoQualification = internalAction({
           const hasHighGrowthExperience = founders.some((f) =>
             f.experience?.some((e) => e.isHighGrowth)
           );
+          const hasRepeatFounder = founders.some((f) => f.isRepeatFounder);
+          const hasTechnicalFounder = founders.some((f) => f.isTechnicalFounder);
+          const hasExceptionalFounder = founders.some((f) => f.founderTier === "exceptional");
           const isStealth = startup.isStealthMode;
           const isRecentlyAnnounced = startup.recentlyAnnounced;
 
@@ -1028,13 +1418,20 @@ export const runAutoQualification = internalAction({
           }
           const marketScore = maxScalability;
 
-          // Overall startup score (weighted)
+          // Use traction score from enrichment if available
+          const tractionScore = startup.tractionScore ?? 0;
+
+          // Overall startup score (weighted) — now includes traction and richer signals
           const overallScore = Math.round(
-            teamScore * 0.5 + // 50% team quality
-            marketScore * 0.3 + // 30% market/scalability
-            (isStealth ? 10 : 0) + // Stealth bonus
-            (isRecentlyAnnounced ? 5 : 0) + // Recently announced bonus
-            (hasTopTierEducation ? 5 : 0) // Top-tier edu bonus
+            teamScore * 0.40 + // 40% team quality
+            marketScore * 0.25 + // 25% market/scalability
+            tractionScore * 0.15 + // 15% traction signals (new)
+            (isStealth ? 5 : 0) + // Stealth bonus
+            (isRecentlyAnnounced ? 3 : 0) + // Recently announced bonus
+            (hasTopTierEducation ? 3 : 0) + // Top-tier edu bonus
+            (hasRepeatFounder ? 5 : 0) + // Repeat founder bonus (new)
+            (hasTechnicalFounder ? 2 : 0) + // Technical founder bonus (new)
+            (hasExceptionalFounder ? 5 : 0) // Exceptional tier bonus (new)
           );
 
           // Qualification criteria - intentionally broad to learn through outreach
@@ -1047,6 +1444,8 @@ export const runAutoQualification = internalAction({
               // Or has strong individual signals
               hasTopTierEducation ||
               hasHighGrowthExperience ||
+              hasRepeatFounder ||
+              hasExceptionalFounder ||
               // Or has interesting signals
               isStealth ||
               isRecentlyAnnounced

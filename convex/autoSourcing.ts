@@ -931,6 +931,7 @@ function calculateFounderScore(profile: LinkedInProfile): {
 export const enrichDiscoveredStartups = action({
   args: {
     exaApiKey: v.string(),
+    crunchbaseApiKey: v.optional(v.string()), // Optional Crunchbase key for funding data
     limit: v.optional(v.number()), // How many startups to enrich
   },
   handler: async (ctx, args) => {
@@ -990,10 +991,53 @@ export const enrichDiscoveredStartups = action({
               startupRecentlyAnnounced = true;
             }
           }
+
+          // Search for GitHub profile
+          const githubData = await searchGitHubProfile(
+            args.exaApiKey,
+            founder.firstName,
+            founder.lastName
+          );
+          if (githubData) {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+              founderId: founder._id,
+              githubUrl: githubData.url,
+              githubUsername: githubData.username,
+              githubRepos: githubData.repos,
+              githubBio: githubData.bio,
+            });
+          }
+
+          // Search for Twitter/X profile
+          const twitterData = await searchTwitterProfile(
+            args.exaApiKey,
+            founder.firstName,
+            founder.lastName
+          );
+          if (twitterData) {
+            await ctx.runMutation(internal.autoSourcingHelpers.updateFounderSocialProfiles, {
+              founderId: founder._id,
+              twitterUrl: twitterData.url,
+              twitterHandle: twitterData.handle,
+              twitterBio: twitterData.bio,
+            });
+          }
         }
 
-        // Search for company information via Exa
-        const companyInfo = await searchCompanyInfo(args.exaApiKey, startup.companyName);
+        // Deep company enrichment via Exa (company info + website + funding + news)
+        const companyInfo = await enrichCompanyDeep(args.exaApiKey, startup.companyName);
+
+        // Crunchbase enrichment (if API key provided)
+        if (args.crunchbaseApiKey) {
+          const crunchbaseData = await enrichFromCrunchbase(args.crunchbaseApiKey, startup.companyName);
+          if (crunchbaseData && companyInfo) {
+            // Merge Crunchbase data into company info for the startup update
+            await ctx.runMutation(internal.autoSourcingHelpers.updateStartupCrunchbase, {
+              startupId: startup._id,
+              crunchbaseData,
+            });
+          }
+        }
 
         // Update startup with enriched data
         await ctx.runMutation(internal.autoSourcingHelpers.updateStartupEnriched, {
@@ -1017,13 +1061,13 @@ export const enrichDiscoveredStartups = action({
   },
 });
 
-// Search for company information using Exa.ai
-async function searchCompanyInfo(apiKey: string, companyName: string): Promise<{
-  description?: string;
-  website?: string;
-  funding?: string;
-  news?: string[];
-} | null> {
+// ============ GITHUB PROFILE DISCOVERY ============
+
+async function searchGitHubProfile(
+  apiKey: string,
+  firstName: string,
+  lastName: string
+): Promise<{ url: string; username: string; repos?: number; bio?: string } | null> {
   try {
     const response = await fetch("https://api.exa.ai/search", {
       method: "POST",
@@ -1032,60 +1076,536 @@ async function searchCompanyInfo(apiKey: string, companyName: string): Promise<{
         "x-api-key": apiKey,
       },
       body: JSON.stringify({
-        query: `${companyName} UK startup company`,
-        numResults: 5,
+        query: `${firstName} ${lastName} software developer`,
+        numResults: 3,
+        includeDomains: ["github.com"],
         type: "neural",
-        useAutoprompt: true,
-        contents: {
-          text: true,
-        },
+        contents: { text: true },
       }),
     });
 
-    if (!response.ok) {
-      return null;
-    }
+    if (!response.ok) return null;
 
     const data = await response.json();
+    // Match github.com/{username} (not repo pages)
+    const profileResult = data.results?.find((r: { url: string }) => {
+      const url = r.url;
+      // Match https://github.com/username (1 path segment, not a repo)
+      const match = url.match(/github\.com\/([^/]+)\/?$/);
+      return match && !["topics", "explore", "trending", "search"].includes(match[1]);
+    });
 
-    if (!data.results || data.results.length === 0) {
+    if (!profileResult) return null;
+
+    const url = profileResult.url;
+    const username = url.match(/github\.com\/([^/]+)/)?.[1] || "";
+    const text = (profileResult.text || "").toLowerCase();
+
+    // Try to extract repo count from profile text
+    let repos: number | undefined;
+    const repoMatch = text.match(/(\d+)\s*repositor/i);
+    if (repoMatch) repos = parseInt(repoMatch[1]);
+
+    // Extract bio (first meaningful line)
+    const lines = (profileResult.text || "").split("\n").filter((l: string) => l.trim());
+    let bio: string | undefined;
+    for (const line of lines.slice(0, 5)) {
+      if (line.length > 20 && line.length < 200 && !line.includes("github.com")) {
+        bio = line.trim();
+        break;
+      }
+    }
+
+    return { url, username, repos, bio };
+  } catch (error) {
+    console.error("Error searching GitHub profile:", error);
+    return null;
+  }
+}
+
+// ============ TWITTER/X PROFILE DISCOVERY ============
+
+async function searchTwitterProfile(
+  apiKey: string,
+  firstName: string,
+  lastName: string
+): Promise<{ url: string; handle: string; bio?: string } | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        query: `${firstName} ${lastName} founder startup`,
+        numResults: 3,
+        includeDomains: ["twitter.com", "x.com"],
+        type: "neural",
+        contents: { text: true },
+      }),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const profileResult = data.results?.find((r: { url: string }) => {
+      const url = r.url;
+      // Match twitter.com/{handle} or x.com/{handle}
+      return /(?:twitter\.com|x\.com)\/[^/]+\/?$/.test(url) &&
+        !url.includes("/status/") && !url.includes("/search");
+    });
+
+    if (!profileResult) return null;
+
+    const url = profileResult.url;
+    const handle = url.match(/(?:twitter\.com|x\.com)\/([^/]+)/)?.[1] || "";
+
+    // Extract bio from profile text
+    const lines = (profileResult.text || "").split("\n").filter((l: string) => l.trim());
+    let bio: string | undefined;
+    for (const line of lines.slice(0, 5)) {
+      if (line.length > 15 && line.length < 200 && !line.includes("twitter.com") && !line.includes("x.com")) {
+        bio = line.trim();
+        break;
+      }
+    }
+
+    return { url, handle, bio };
+  } catch (error) {
+    console.error("Error searching Twitter profile:", error);
+    return null;
+  }
+}
+
+// ============ DEEP COMPANY ENRICHMENT ============
+
+interface CompanyEnrichmentResult {
+  description?: string;
+  website?: string;
+  productDescription?: string;
+  businessModel?: string;
+  techStack?: string[];
+  teamSize?: string;
+  newsArticles?: Array<{ title: string; url: string; source?: string; date?: string }>;
+  fundingDetails?: Array<{ round?: string; amount?: string; date?: string; investors?: string[] }>;
+  crunchbaseUrl?: string;
+}
+
+// Tech stack keywords to detect from website/company content
+const TECH_STACK_KEYWORDS: Record<string, string> = {
+  "react": "React", "next.js": "Next.js", "nextjs": "Next.js",
+  "vue": "Vue.js", "angular": "Angular", "svelte": "Svelte",
+  "node.js": "Node.js", "nodejs": "Node.js", "python": "Python",
+  "django": "Django", "flask": "Flask", "fastapi": "FastAPI",
+  "typescript": "TypeScript", "golang": "Go", "rust": "Rust",
+  "kubernetes": "Kubernetes", "docker": "Docker", "aws": "AWS",
+  "gcp": "Google Cloud", "azure": "Azure", "terraform": "Terraform",
+  "graphql": "GraphQL", "postgresql": "PostgreSQL", "mongodb": "MongoDB",
+  "redis": "Redis", "elasticsearch": "Elasticsearch", "kafka": "Kafka",
+  "openai": "OpenAI", "langchain": "LangChain", "pytorch": "PyTorch",
+  "tensorflow": "TensorFlow", "hugging face": "Hugging Face",
+};
+
+const NEWS_DOMAINS = [
+  "techcrunch.com", "sifted.eu", "bloomberg.com", "reuters.com",
+  "theguardian.com", "ft.com", "wired.com", "thenextweb.com",
+  "venturebeat.com", "eu-startups.com", "uktech.news", "cityam.com",
+  "startups.co.uk", "businessinsider.com", "forbes.com",
+];
+
+const FUNDING_PATTERNS = [
+  /(?:raised?|secures?|closes?)\s+(?:£|\$|€)(\d+(?:\.\d+)?)\s*(m(?:illion)?|k|bn|billion)?/gi,
+  /(?:£|\$|€)(\d+(?:\.\d+)?)\s*(m(?:illion)?|k|bn|billion)?\s+(?:seed|series\s*[a-d]|pre-seed|round|funding|investment)/gi,
+  /(seed|series\s*[a-d]|pre-seed)\s+(?:round|funding)?\s*(?:of\s+)?(?:£|\$|€)(\d+(?:\.\d+)?)\s*(m(?:illion)?|k|bn|billion)?/gi,
+];
+
+const INVESTOR_PATTERNS = [
+  /(?:led by|from|backed by|investors?\s+include)\s+([A-Z][a-zA-Z\s&]+(?:Capital|Ventures|Partners|VC|Fund|Investments|Seed))/gi,
+  /([A-Z][a-zA-Z\s&]+(?:Capital|Ventures|Partners|VC|Fund))\s+(?:led|participated|invested|joined)/gi,
+];
+
+async function enrichCompanyDeep(
+  apiKey: string,
+  companyName: string
+): Promise<CompanyEnrichmentResult | null> {
+  try {
+    // Run multiple Exa searches in parallel for different aspects
+    const [generalResults, newsResults, fundingResults] = await Promise.all([
+      // 1. General company info + website
+      exaSearch(apiKey, `${companyName} UK startup company`, 5),
+      // 2. News and press mentions
+      exaSearch(apiKey, `${companyName} startup news announcement launch`, 5, NEWS_DOMAINS),
+      // 3. Funding/investment news
+      exaSearch(apiKey, `${companyName} startup funding raised investment round`, 5),
+    ]);
+
+    const result: CompanyEnrichmentResult = {};
+
+    // === Process general results ===
+    if (generalResults) {
+      for (const item of generalResults) {
+        const url = item.url || "";
+        const text = item.text || "";
+
+        // Find company website (exclude social/news/aggregator sites)
+        if (!result.website && url.length > 0 &&
+            !url.includes("linkedin") && !url.includes("twitter") && !url.includes("x.com") &&
+            !url.includes("crunchbase") && !url.includes("pitchbook") &&
+            !url.includes("companieshouse") && !url.includes("endole") &&
+            !NEWS_DOMAINS.some(d => url.includes(d))) {
+          result.website = url;
+        }
+
+        // Extract Crunchbase URL
+        if (url.includes("crunchbase.com") && !result.crunchbaseUrl) {
+          result.crunchbaseUrl = url;
+        }
+
+        // Extract description
+        if (!result.description && text.length > 50) {
+          result.description = text.substring(0, 500);
+        }
+
+        // Detect tech stack from content
+        if (text.length > 30) {
+          const textLower = text.toLowerCase();
+          const detectedTech: string[] = [];
+          for (const [keyword, label] of Object.entries(TECH_STACK_KEYWORDS)) {
+            if (textLower.includes(keyword) && !detectedTech.includes(label)) {
+              detectedTech.push(label);
+            }
+          }
+          if (detectedTech.length > 0) {
+            result.techStack = [...new Set([...(result.techStack || []), ...detectedTech])];
+          }
+        }
+
+        // Detect business model
+        if (!result.businessModel && text.length > 30) {
+          const textLower = text.toLowerCase();
+          if (textLower.includes("b2b") || textLower.includes("enterprise")) {
+            result.businessModel = "B2B";
+          } else if (textLower.includes("b2c") || textLower.includes("consumer")) {
+            result.businessModel = "B2C";
+          } else if (textLower.includes("marketplace")) {
+            result.businessModel = "Marketplace";
+          } else if (textLower.includes("d2c") || textLower.includes("dtc") || textLower.includes("direct to consumer")) {
+            result.businessModel = "DTC";
+          } else if (textLower.includes("b2b2c")) {
+            result.businessModel = "B2B2C";
+          }
+        }
+
+        // Detect team size
+        if (!result.teamSize && text.length > 30) {
+          const sizeMatch = text.match(/(\d+)\s*(?:employees?|team\s*members?|people|staff)/i);
+          if (sizeMatch) {
+            const count = parseInt(sizeMatch[1]);
+            if (count >= 1 && count <= 10000) {
+              result.teamSize = count <= 10 ? "1-10" :
+                count <= 50 ? "11-50" :
+                count <= 200 ? "51-200" :
+                count <= 500 ? "201-500" : "500+";
+            }
+          }
+        }
+      }
+    }
+
+    // === Process news results ===
+    const newsArticles: CompanyEnrichmentResult["newsArticles"] = [];
+    if (newsResults) {
+      for (const item of newsResults) {
+        const url = item.url || "";
+        const title = item.title || "";
+        if (!title && !url) continue;
+
+        // Determine source from URL
+        let source: string | undefined;
+        for (const domain of NEWS_DOMAINS) {
+          if (url.includes(domain)) {
+            source = domain.split(".")[0];
+            // Capitalize
+            source = source.charAt(0).toUpperCase() + source.slice(1);
+            break;
+          }
+        }
+
+        // Extract date if available
+        const dateMatch = (item.publishedDate || item.text || "").match(/\d{4}-\d{2}-\d{2}/);
+
+        newsArticles.push({
+          title: title.substring(0, 200),
+          url,
+          source,
+          date: dateMatch?.[0],
+        });
+      }
+      if (newsArticles.length > 0) {
+        result.newsArticles = newsArticles.slice(0, 5);
+      }
+    }
+
+    // === Process funding results ===
+    const fundingDetails: CompanyEnrichmentResult["fundingDetails"] = [];
+    if (fundingResults) {
+      for (const item of fundingResults) {
+        const text = item.text || "";
+        if (text.length < 20) continue;
+
+        // Extract funding amounts
+        for (const pattern of FUNDING_PATTERNS) {
+          pattern.lastIndex = 0; // Reset regex state
+          let match;
+          while ((match = pattern.exec(text)) !== null) {
+            const funding: { round?: string; amount?: string; date?: string; investors?: string[] } = {};
+
+            // Parse amount
+            const amountParts = match.slice(1).filter(Boolean);
+            if (amountParts.length >= 1) {
+              const numStr = amountParts.find(p => /\d/.test(p));
+              const suffix = amountParts.find(p => /^(m|k|bn|million|billion)/i.test(p));
+              if (numStr) {
+                funding.amount = `£${numStr}${suffix ? suffix.charAt(0).toUpperCase() : "M"}`;
+              }
+            }
+
+            // Parse round type
+            const roundMatch = text.match(/(pre-seed|seed|series\s*[a-d])/i);
+            if (roundMatch) {
+              funding.round = roundMatch[1].toLowerCase().replace(/\s+/g, "-");
+            }
+
+            // Parse date
+            const dateMatch = text.match(/\b(20\d{2})\b/);
+            if (dateMatch) funding.date = dateMatch[1];
+
+            if (funding.amount || funding.round) {
+              fundingDetails.push(funding);
+            }
+          }
+        }
+
+        // Extract investors
+        for (const pattern of INVESTOR_PATTERNS) {
+          pattern.lastIndex = 0;
+          let match;
+          while ((match = pattern.exec(text)) !== null) {
+            const investorName = match[1].trim();
+            if (investorName.length > 3 && investorName.length < 60) {
+              // Attach to most recent funding detail or create new one
+              if (fundingDetails.length > 0) {
+                const last = fundingDetails[fundingDetails.length - 1];
+                last.investors = [...(last.investors || []), investorName];
+              } else {
+                fundingDetails.push({ investors: [investorName] });
+              }
+            }
+          }
+        }
+      }
+
+      if (fundingDetails.length > 0) {
+        // Deduplicate funding entries
+        const seen = new Set<string>();
+        result.fundingDetails = fundingDetails.filter(f => {
+          const key = `${f.round || ""}-${f.amount || ""}`;
+          if (seen.has(key) && key !== "-") return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 5);
+
+        // Update funding stage from most recent round
+        // (will be used by updateStartupEnriched)
+      }
+    }
+
+    // === Extract product description from website ===
+    if (result.website) {
+      try {
+        const websiteContent = await exaFetchUrl(apiKey, result.website);
+        if (websiteContent) {
+          const text = websiteContent.text || "";
+          // Take the first substantial paragraph as product description
+          const paragraphs = text.split("\n").filter((p: string) => p.trim().length > 40);
+          if (paragraphs.length > 0) {
+            result.productDescription = paragraphs[0].trim().substring(0, 500);
+          }
+
+          // Also detect tech stack from website
+          const textLower = text.toLowerCase();
+          for (const [keyword, label] of Object.entries(TECH_STACK_KEYWORDS)) {
+            if (textLower.includes(keyword)) {
+              result.techStack = [...new Set([...(result.techStack || []), label])];
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching website content:", error);
+      }
+    }
+
+    // Only return if we found something useful
+    if (result.description || result.website || result.newsArticles || result.fundingDetails) {
+      return result;
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Error in deep company enrichment:", error);
+    return null;
+  }
+}
+
+// Helper: Exa search with optional domain filtering
+async function exaSearch(
+  apiKey: string,
+  query: string,
+  numResults: number,
+  includeDomains?: string[],
+): Promise<Array<{ url: string; text: string; title: string; publishedDate?: string }> | null> {
+  try {
+    const body: Record<string, unknown> = {
+      query,
+      numResults,
+      type: "neural",
+      useAutoprompt: true,
+      contents: { text: true },
+    };
+    if (includeDomains && includeDomains.length > 0) {
+      body.includeDomains = includeDomains;
+    }
+
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.results || null;
+  } catch {
+    return null;
+  }
+}
+
+// Helper: Fetch a specific URL's content via Exa
+async function exaFetchUrl(
+  apiKey: string,
+  url: string
+): Promise<{ text: string } | null> {
+  try {
+    const response = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        urls: [url],
+        text: true,
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.results?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+// ============ CRUNCHBASE ENRICHMENT ============
+
+export interface CrunchbaseData {
+  totalFunding?: string;
+  lastRound?: string;
+  lastRoundDate?: string;
+  investors?: string[];
+  employeeCount?: string;
+  categories?: string[];
+}
+
+export async function enrichFromCrunchbase(
+  apiKey: string,
+  companyName: string
+): Promise<CrunchbaseData | null> {
+  try {
+    // Search for company on Crunchbase
+    const searchUrl = `https://api.crunchbase.com/api/v4/autocompletes?query=${encodeURIComponent(companyName)}&collection_ids=organizations&limit=3`;
+
+    const searchResponse = await fetch(searchUrl, {
+      headers: { "X-cb-user-key": apiKey },
+    });
+
+    if (!searchResponse.ok) {
+      console.error("Crunchbase search error:", searchResponse.status);
       return null;
     }
 
-    // Extract useful information from results
-    let description = "";
-    let website = "";
-    const news: string[] = [];
+    const searchData = await searchResponse.json();
+    const org = searchData.entities?.[0];
+    if (!org) return null;
 
-    for (const result of data.results) {
-      const url = result.url || "";
-      const text = result.text || "";
+    const permalink = org.identifier?.permalink;
+    if (!permalink) return null;
 
-      // Look for company website
-      if (!website && !url.includes("linkedin") && !url.includes("twitter") &&
-          !url.includes("crunchbase") && !url.includes("news")) {
-        website = url;
-      }
+    // Get organization details
+    const orgUrl = `https://api.crunchbase.com/api/v4/entities/organizations/${permalink}?field_ids=short_description,categories,num_employees_enum,funding_total,last_funding_type,last_funding_at,investor_identifiers&card_ids=funding_rounds`;
 
-      // Extract description from first substantial text
-      if (!description && text.length > 50) {
-        description = text.substring(0, 300);
-      }
+    const orgResponse = await fetch(orgUrl, {
+      headers: { "X-cb-user-key": apiKey },
+    });
 
-      // Collect news mentions
-      if (url.includes("techcrunch") || url.includes("sifted") || url.includes("news") ||
-          url.includes("bloomberg") || url.includes("reuters")) {
-        news.push(result.title || url);
-      }
+    if (!orgResponse.ok) return null;
+
+    const orgData = await orgResponse.json();
+    const props = orgData.properties || {};
+
+    const result: CrunchbaseData = {};
+
+    // Total funding
+    if (props.funding_total?.value_usd) {
+      const amt = props.funding_total.value_usd;
+      if (amt >= 1e9) result.totalFunding = `$${(amt / 1e9).toFixed(1)}B`;
+      else if (amt >= 1e6) result.totalFunding = `$${(amt / 1e6).toFixed(1)}M`;
+      else if (amt >= 1e3) result.totalFunding = `$${(amt / 1e3).toFixed(0)}K`;
+      else result.totalFunding = `$${amt}`;
     }
 
-    return {
-      description: description || undefined,
-      website: website || undefined,
-      news: news.length > 0 ? news.slice(0, 3) : undefined,
-    };
+    // Last round
+    if (props.last_funding_type) {
+      result.lastRound = props.last_funding_type.replace(/_/g, " ");
+    }
+    if (props.last_funding_at) {
+      result.lastRoundDate = props.last_funding_at;
+    }
+
+    // Investors
+    if (props.investor_identifiers) {
+      result.investors = props.investor_identifiers
+        .slice(0, 10)
+        .map((i: { value: string }) => i.value);
+    }
+
+    // Employee count
+    if (props.num_employees_enum) {
+      result.employeeCount = props.num_employees_enum.replace(/c_/g, "").replace(/_/g, "-");
+    }
+
+    // Categories
+    if (props.categories) {
+      result.categories = props.categories.map((c: { value: string }) => c.value);
+    }
+
+    return result;
   } catch (error) {
-    console.error("Error searching company info:", error);
+    console.error("Crunchbase enrichment error:", error);
     return null;
   }
 }

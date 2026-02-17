@@ -254,6 +254,34 @@ export const updateFounderEnriched = internalMutation({
   },
 });
 
+// Update founder with social profile data (GitHub, Twitter, etc.)
+export const updateFounderSocialProfiles = internalMutation({
+  args: {
+    founderId: v.id("founders"),
+    githubUrl: v.optional(v.string()),
+    githubUsername: v.optional(v.string()),
+    githubRepos: v.optional(v.number()),
+    githubBio: v.optional(v.string()),
+    twitterUrl: v.optional(v.string()),
+    twitterHandle: v.optional(v.string()),
+    twitterBio: v.optional(v.string()),
+    personalWebsite: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { founderId, ...updates } = args;
+    // Only patch fields that are actually provided
+    const patch: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        patch[key] = value;
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(founderId, patch);
+    }
+  },
+});
+
 // Update startup with enriched data
 export const updateStartupEnriched = internalMutation({
   args: {
@@ -264,6 +292,24 @@ export const updateStartupEnriched = internalMutation({
       v.object({
         description: v.optional(v.string()),
         website: v.optional(v.string()),
+        productDescription: v.optional(v.string()),
+        businessModel: v.optional(v.string()),
+        techStack: v.optional(v.array(v.string())),
+        teamSize: v.optional(v.string()),
+        newsArticles: v.optional(v.array(v.object({
+          title: v.string(),
+          url: v.string(),
+          source: v.optional(v.string()),
+          date: v.optional(v.string()),
+        }))),
+        fundingDetails: v.optional(v.array(v.object({
+          round: v.optional(v.string()),
+          amount: v.optional(v.string()),
+          date: v.optional(v.string()),
+          investors: v.optional(v.array(v.string())),
+        }))),
+        crunchbaseUrl: v.optional(v.string()),
+        // Legacy compatibility
         funding: v.optional(v.string()),
         news: v.optional(v.array(v.string())),
       })
@@ -288,18 +334,111 @@ export const updateStartupEnriched = internalMutation({
         ? Math.round(founderScores.reduce((a, b) => a + b, 0) / founderScores.length)
         : undefined;
 
+    // Calculate traction score from enrichment signals
+    let tractionScore = 0;
+    const info = args.companyInfo;
+    if (info) {
+      if (info.website) tractionScore += 15; // Has a website
+      if (info.newsArticles && info.newsArticles.length > 0) tractionScore += 20; // Press coverage
+      if (info.newsArticles && info.newsArticles.length >= 3) tractionScore += 10; // Multiple press mentions
+      if (info.fundingDetails && info.fundingDetails.length > 0) tractionScore += 25; // Has raised funding
+      if (info.teamSize) {
+        const sizeScore = info.teamSize === "1-10" ? 5 : info.teamSize === "11-50" ? 15 : 20;
+        tractionScore += sizeScore; // Team growth
+      }
+      if (info.techStack && info.techStack.length > 0) tractionScore += 5; // Detectable tech stack
+      if (info.productDescription) tractionScore += 10; // Has product live
+    }
+    tractionScore = Math.min(100, tractionScore);
+
+    // Determine funding stage from funding details
+    let fundingStage = startup.fundingStage;
+    let estimatedFunding = startup.estimatedFunding;
+    if (info?.fundingDetails && info.fundingDetails.length > 0) {
+      // Use the most advanced round found
+      const rounds = info.fundingDetails
+        .map(f => f.round)
+        .filter(Boolean) as string[];
+
+      const roundOrder = ["pre-seed", "seed", "series-a", "series-b", "series-c", "series-d"];
+      for (const round of roundOrder.reverse()) {
+        if (rounds.some(r => r.includes(round))) {
+          fundingStage = round;
+          break;
+        }
+      }
+
+      // Use the latest funding amount
+      const amounts = info.fundingDetails.map(f => f.amount).filter(Boolean) as string[];
+      if (amounts.length > 0) {
+        estimatedFunding = amounts[amounts.length - 1];
+      }
+    }
+
     await ctx.db.patch(args.startupId, {
-      // Update stealth status if detected from LinkedIn
+      // Stealth signals
       isStealthMode: startup.isStealthMode || args.isStealthFromLinkedIn,
       recentlyAnnounced: startup.recentlyAnnounced || args.isRecentlyAnnounced,
-      // Update notes with company info
-      notes: args.companyInfo?.description
-        ? `${startup.notes || ""}\n\n${args.companyInfo.description}`.trim()
+      // Company data
+      description: info?.description || startup.description,
+      website: info?.website || startup.website,
+      productDescription: info?.productDescription,
+      businessModel: info?.businessModel,
+      techStack: info?.techStack,
+      teamSize: info?.teamSize,
+      newsArticles: info?.newsArticles,
+      fundingDetails: info?.fundingDetails,
+      crunchbaseUrl: info?.crunchbaseUrl,
+      // Funding
+      fundingStage,
+      estimatedFunding,
+      // Notes
+      notes: info?.description
+        ? `${startup.notes || ""}\n\n${info.description}`.trim()
         : startup.notes,
-      // Update scores
+      // Scores
       teamScore,
-      // Move to researching stage since we've enriched it
-      stage: "researching",
+      tractionScore: tractionScore > 0 ? tractionScore : undefined,
+      // Metadata
+      enrichedAt: Date.now(),
+      // Move to researching stage
+      stage: "researching" as const,
     });
+  },
+});
+
+// Update startup with Crunchbase data
+export const updateStartupCrunchbase = internalMutation({
+  args: {
+    startupId: v.id("startups"),
+    crunchbaseData: v.object({
+      totalFunding: v.optional(v.string()),
+      lastRound: v.optional(v.string()),
+      lastRoundDate: v.optional(v.string()),
+      investors: v.optional(v.array(v.string())),
+      employeeCount: v.optional(v.string()),
+      categories: v.optional(v.array(v.string())),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const startup = await ctx.db.get(args.startupId);
+    if (!startup) return;
+
+    const patch: Record<string, unknown> = {
+      crunchbaseData: args.crunchbaseData,
+    };
+
+    // Update funding stage from Crunchbase if we have it
+    if (args.crunchbaseData.lastRound) {
+      patch.fundingStage = args.crunchbaseData.lastRound;
+    }
+    if (args.crunchbaseData.totalFunding) {
+      patch.estimatedFunding = args.crunchbaseData.totalFunding;
+    }
+    if (args.crunchbaseData.employeeCount) {
+      patch.teamSize = args.crunchbaseData.employeeCount;
+    }
+
+    await ctx.db.patch(args.startupId, patch);
   },
 });
