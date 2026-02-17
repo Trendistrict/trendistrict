@@ -202,11 +202,30 @@ export const updateFounderEnriched = internalMutation({
           isHighGrowth: v.optional(v.boolean()),
         })
       ),
+      // Enrichment signals
+      isRepeatFounder: v.optional(v.boolean()),
+      isTechnicalFounder: v.optional(v.boolean()),
+      previousExits: v.optional(v.number()),
+      yearsOfExperience: v.optional(v.number()),
+      domainExpertise: v.optional(v.array(v.string())),
+      hasPhd: v.optional(v.boolean()),
+      hasMba: v.optional(v.boolean()),
+      enrichmentConfidence: v.optional(v.union(
+        v.literal("high"),
+        v.literal("medium"),
+        v.literal("low")
+      )),
     }),
     scores: v.object({
       educationScore: v.number(),
       experienceScore: v.number(),
       overallScore: v.number(),
+      founderTier: v.union(
+        v.literal("exceptional"),
+        v.literal("strong"),
+        v.literal("promising"),
+        v.literal("standard")
+      ),
     }),
   },
   handler: async (ctx, args) => {
@@ -220,6 +239,17 @@ export const updateFounderEnriched = internalMutation({
       educationScore: args.scores.educationScore,
       experienceScore: args.scores.experienceScore,
       overallScore: args.scores.overallScore,
+      // New enrichment signals
+      isRepeatFounder: args.linkedInData.isRepeatFounder,
+      isTechnicalFounder: args.linkedInData.isTechnicalFounder,
+      previousExits: args.linkedInData.previousExits,
+      yearsOfExperience: args.linkedInData.yearsOfExperience,
+      domainExpertise: args.linkedInData.domainExpertise,
+      hasPhd: args.linkedInData.hasPhd,
+      hasMba: args.linkedInData.hasMba,
+      founderTier: args.scores.founderTier,
+      enrichedAt: Date.now(),
+      enrichmentConfidence: args.linkedInData.enrichmentConfidence,
     });
   },
 });

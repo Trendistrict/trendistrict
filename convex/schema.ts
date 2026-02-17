@@ -93,6 +93,29 @@ export default defineSchema({
     experienceScore: v.optional(v.number()), // 0-100
     overallScore: v.optional(v.number()), // 0-100
 
+    // Enrichment signals
+    isRepeatFounder: v.optional(v.boolean()), // Founded a company before this one
+    isTechnicalFounder: v.optional(v.boolean()), // CS/engineering background or technical roles
+    previousExits: v.optional(v.number()), // Count of exits (acquired/IPO) detected
+    yearsOfExperience: v.optional(v.number()), // Total career length in years
+    domainExpertise: v.optional(v.array(v.string())), // e.g. ["fintech", "ai", "saas"]
+    hasPhd: v.optional(v.boolean()),
+    hasMba: v.optional(v.boolean()),
+    founderTier: v.optional(v.union(
+      v.literal("exceptional"),
+      v.literal("strong"),
+      v.literal("promising"),
+      v.literal("standard")
+    )),
+
+    // Enrichment metadata
+    enrichedAt: v.optional(v.number()),
+    enrichmentConfidence: v.optional(v.union(
+      v.literal("high"),
+      v.literal("medium"),
+      v.literal("low")
+    )),
+
     // Sourcing metadata
     source: v.string(), // "linkedin", "manual", "companies_house"
     discoveredAt: v.number(),

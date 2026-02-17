@@ -432,6 +432,15 @@ interface LinkedInProfile {
     isCurrent?: boolean;
     isHighGrowth?: boolean;
   }>;
+  // Enrichment signals
+  isRepeatFounder?: boolean;
+  isTechnicalFounder?: boolean;
+  previousExits?: number;
+  yearsOfExperience?: number;
+  domainExpertise?: string[];
+  hasPhd?: boolean;
+  hasMba?: boolean;
+  enrichmentConfidence?: "high" | "medium" | "low";
 }
 
 // Top-tier universities for scoring
@@ -466,6 +475,45 @@ const RECENTLY_ANNOUNCED_KEYWORDS = [
   "thrilled to share", "proud to announce", "officially launching",
   "coming out of stealth", "out of stealth", "publicly announced"
 ];
+
+// Exit signal keywords (acquisition, IPO, etc.)
+const EXIT_KEYWORDS = [
+  "acquired by", "acquisition", "acquired", "exit", "exited",
+  "ipo", "went public", "publicly listed", "sold to", "merged with",
+  "successful exit", "series", "raised"
+];
+
+// Technical role/background indicators
+const TECHNICAL_TITLES = [
+  "engineer", "developer", "architect", "programmer", "scientist",
+  "researcher", "technical", "tech lead", "machine learning", "data",
+  "devops", "sre", "infrastructure", "backend", "frontend", "fullstack",
+  "full-stack", "software", "hardware", "systems", "security"
+];
+
+const TECHNICAL_DEGREES = [
+  "computer science", "computing", "software engineering", "electrical engineering",
+  "mathematics", "physics", "machine learning", "artificial intelligence",
+  "data science", "information technology", "cybersecurity", "robotics",
+  "mechanical engineering", "chemical engineering", "bioengineering",
+  "engineering", "cs", "meng", "beng"
+];
+
+// Domain expertise detection from experience context
+const DOMAIN_KEYWORDS: Record<string, string[]> = {
+  fintech: ["fintech", "payment", "banking", "finance", "trading", "lending", "insurance", "crypto", "blockchain", "defi"],
+  ai: ["artificial intelligence", "machine learning", "deep learning", "nlp", "computer vision", "ai", "neural", "llm", "generative"],
+  saas: ["saas", "b2b", "enterprise software", "platform", "subscription", "cloud software"],
+  healthtech: ["health", "medical", "clinical", "biotech", "pharma", "patient", "healthcare", "nhs", "genomics"],
+  edtech: ["education", "learning", "edtech", "teaching", "school", "university", "training", "curriculum"],
+  ecommerce: ["ecommerce", "e-commerce", "retail", "marketplace", "shopping", "commerce", "dtc", "d2c"],
+  cybersecurity: ["security", "cybersecurity", "infosec", "encryption", "threat", "vulnerability", "penetration"],
+  proptech: ["property", "real estate", "proptech", "housing", "construction", "buildings"],
+  cleantech: ["clean energy", "sustainability", "renewable", "solar", "climate", "carbon", "green", "environmental"],
+  logistics: ["logistics", "supply chain", "shipping", "delivery", "warehouse", "fulfilment", "fleet"],
+  gaming: ["gaming", "game", "esports", "entertainment", "streaming", "interactive"],
+  hrtech: ["hr", "recruitment", "hiring", "talent", "workforce", "people", "employee"],
+};
 
 // Fetch LinkedIn profile content using Exa.ai
 async function fetchLinkedInProfileWithExa(
@@ -606,19 +654,45 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
     }
   }
 
-  // Extract and score education
+  // Extract and score education with degree detection
   const education: LinkedInProfile["education"] = [];
   const eduKeywords = ["University", "College", "Institute", "School", "MBA", "BSc", "MSc", "PhD", "Bachelor", "Master"];
+  let hasPhd = false;
+  let hasMba = false;
 
   for (const line of lines) {
     const lineLower = line.toLowerCase();
     for (const keyword of eduKeywords) {
       if (line.includes(keyword)) {
         const isTopTier = TOP_TIER_UNIVERSITIES.some(uni => lineLower.includes(uni));
+
+        // Extract degree type
+        let degree: string | undefined;
+        if (lineLower.includes("phd") || lineLower.includes("doctorate") || lineLower.includes("dphil")) {
+          degree = "PhD";
+          hasPhd = true;
+        } else if (lineLower.includes("mba")) {
+          degree = "MBA";
+          hasMba = true;
+        } else if (lineLower.includes("master") || lineLower.includes("msc") || lineLower.includes("meng") || lineLower.includes("ma ")) {
+          degree = "Masters";
+        } else if (lineLower.includes("bachelor") || lineLower.includes("bsc") || lineLower.includes("beng") || lineLower.includes("ba ")) {
+          degree = "Bachelors";
+        }
+
+        // Extract field of study
+        let fieldOfStudy: string | undefined;
+        for (const techDegree of TECHNICAL_DEGREES) {
+          if (lineLower.includes(techDegree)) {
+            fieldOfStudy = techDegree.charAt(0).toUpperCase() + techDegree.slice(1);
+            break;
+          }
+        }
+
         education.push({
           school: line.substring(0, 100),
-          degree: undefined,
-          fieldOfStudy: undefined,
+          degree,
+          fieldOfStudy,
           isTopTier,
         });
         break;
@@ -638,7 +712,7 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
       if (lineLower.includes(company)) {
         // Try to extract title
         let title = "Unknown";
-        const titlePatterns = ["engineer", "developer", "manager", "director", "vp", "head", "lead", "founder", "ceo", "cto", "cfo"];
+        const titlePatterns = ["engineer", "developer", "manager", "director", "vp", "head", "lead", "founder", "ceo", "cto", "cfo", "co-founder", "cofounder", "principal", "partner"];
         for (const pattern of titlePatterns) {
           if (lineLower.includes(pattern)) {
             const idx = lineLower.indexOf(pattern);
@@ -678,6 +752,77 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
     }
   }
 
+  // --- New enrichment signals ---
+
+  // Repeat founder detection: look for "Founder" / "Co-founder" titles at previous companies
+  const founderTitles = experience.filter(e =>
+    /\b(founder|co-founder|cofounder)\b/i.test(e.title)
+  );
+  // If they have founder titles at more than one company, or the current startup plus a previous one
+  const isRepeatFounder = founderTitles.length >= 2;
+
+  // Technical founder detection: technical degree or technical title history
+  const hasTechnicalDegree = education.some(e =>
+    e.fieldOfStudy && TECHNICAL_DEGREES.some(td =>
+      e.fieldOfStudy!.toLowerCase().includes(td)
+    )
+  );
+  const hasTechnicalRole = experience.some(e =>
+    TECHNICAL_TITLES.some(tt => e.title.toLowerCase().includes(tt))
+  );
+  const isTechnicalFounder = hasTechnicalDegree || hasTechnicalRole;
+
+  // Previous exits detection
+  let previousExits = 0;
+  for (const keyword of EXIT_KEYWORDS) {
+    if (textLower.includes(keyword)) {
+      previousExits++;
+    }
+  }
+  // Normalize — multiple keyword hits for the same exit, cap at reasonable count
+  previousExits = Math.min(previousExits, 5);
+  // Only count if they were actually a founder/leader (otherwise it's just a company they worked at)
+  if (founderTitles.length === 0 && previousExits > 0) {
+    // Reduce confidence — they may have been at a company that exited but didn't lead it
+    previousExits = Math.min(previousExits, 1);
+  }
+
+  // Years of experience estimation
+  let yearsOfExperience: number | undefined;
+  const currentYear = new Date().getFullYear();
+  // Try to extract years from experience entries
+  const yearMatches = text.match(/\b(19|20)\d{2}\b/g);
+  if (yearMatches) {
+    const years = yearMatches.map(Number).filter(y => y >= 1980 && y <= currentYear);
+    if (years.length >= 2) {
+      yearsOfExperience = currentYear - Math.min(...years);
+    }
+  }
+
+  // Domain expertise detection from full profile text
+  const domainExpertise: string[] = [];
+  for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+    const matchCount = keywords.filter(kw => textLower.includes(kw)).length;
+    // Require at least 2 keyword matches to tag a domain (avoids false positives)
+    if (matchCount >= 2) {
+      domainExpertise.push(domain);
+    }
+  }
+
+  // Enrichment confidence based on how much data we found
+  let enrichmentConfidence: "high" | "medium" | "low" = "low";
+  const dataPoints = [
+    headline ? 1 : 0,
+    location ? 1 : 0,
+    education.length > 0 ? 1 : 0,
+    experience.length > 0 ? 1 : 0,
+    experience.length >= 3 ? 1 : 0,
+    education.some(e => e.degree) ? 1 : 0,
+  ].reduce((a, b) => a + b, 0);
+
+  if (dataPoints >= 5) enrichmentConfidence = "high";
+  else if (dataPoints >= 3) enrichmentConfidence = "medium";
+
   return {
     linkedInUrl,
     headline: headline || undefined,
@@ -688,14 +833,24 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
     stealthSignals: stealthSignals.length > 0 ? stealthSignals : undefined,
     education: education.slice(0, 5),
     experience: experience.slice(0, 10),
+    // New signals
+    isRepeatFounder,
+    isTechnicalFounder,
+    previousExits,
+    yearsOfExperience,
+    domainExpertise: domainExpertise.length > 0 ? domainExpertise : undefined,
+    hasPhd,
+    hasMba,
+    enrichmentConfidence,
   };
 }
 
-// Calculate founder score based on education and experience
+// Calculate founder score based on education, experience, and enrichment signals
 function calculateFounderScore(profile: LinkedInProfile): {
   educationScore: number;
   experienceScore: number;
   overallScore: number;
+  founderTier: "exceptional" | "strong" | "promising" | "standard";
 } {
   let educationScore = 0;
   let experienceScore = 0;
@@ -706,6 +861,14 @@ function calculateFounderScore(profile: LinkedInProfile): {
     educationScore = Math.min(100, 50 + topTierCount * 25);
   } else if (profile.education.length > 0) {
     educationScore = 30; // Has some education
+  }
+
+  // PhD bonus (+15) and MBA bonus (+10)
+  if (profile.hasPhd) {
+    educationScore = Math.min(100, educationScore + 15);
+  }
+  if (profile.hasMba) {
+    educationScore = Math.min(100, educationScore + 10);
   }
 
   // Experience scoring (max 100)
@@ -732,10 +895,36 @@ function calculateFounderScore(profile: LinkedInProfile): {
     experienceScore = Math.min(100, experienceScore + 15);
   }
 
+  // Repeat founder bonus (+15) — proven they can build companies
+  if (profile.isRepeatFounder) {
+    experienceScore = Math.min(100, experienceScore + 15);
+  }
+
+  // Previous exit bonus (+10) — they've done it before successfully
+  if (profile.previousExits && profile.previousExits > 0) {
+    experienceScore = Math.min(100, experienceScore + 10);
+  }
+
+  // Career depth bonus — experienced operators score higher
+  if (profile.yearsOfExperience && profile.yearsOfExperience >= 10) {
+    experienceScore = Math.min(100, experienceScore + 5);
+  }
+
   // Overall score (weighted average)
   const overallScore = Math.round(educationScore * 0.4 + experienceScore * 0.6);
 
-  return { educationScore, experienceScore, overallScore };
+  // Determine founder tier based on overall score + key signals
+  let founderTier: "exceptional" | "strong" | "promising" | "standard" = "standard";
+
+  if (overallScore >= 80 || (profile.isRepeatFounder && profile.previousExits && profile.previousExits > 0)) {
+    founderTier = "exceptional";
+  } else if (overallScore >= 65 || (profile.isRepeatFounder && highGrowthCount >= 1)) {
+    founderTier = "strong";
+  } else if (overallScore >= 45 || highGrowthCount >= 1 || topTierCount >= 1) {
+    founderTier = "promising";
+  }
+
+  return { educationScore, experienceScore, overallScore, founderTier };
 }
 
 // Comprehensive enrichment action - enriches all founders for discovered startups

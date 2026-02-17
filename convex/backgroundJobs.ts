@@ -646,13 +646,46 @@ export const cleanupOldRecords = internalAction({
 const TOP_TIER_UNIVERSITIES = [
   "oxford", "cambridge", "imperial", "ucl", "lse", "stanford", "mit", "harvard",
   "yale", "princeton", "berkeley", "carnegie mellon", "eth zurich", "caltech",
+  "columbia", "chicago", "wharton", "insead", "london business school",
 ];
 
 const HIGH_GROWTH_COMPANIES = [
   "google", "meta", "facebook", "amazon", "apple", "microsoft", "netflix",
-  "stripe", "revolut", "monzo", "wise", "deliveroo", "uber", "airbnb",
-  "spotify", "klarna", "openai", "anthropic", "deepmind", "figma", "notion",
+  "stripe", "revolut", "monzo", "wise", "transferwise", "checkout.com",
+  "deliveroo", "uber", "airbnb", "spotify", "klarna", "plaid", "figma",
+  "notion", "slack", "zoom", "shopify", "coinbase", "openai", "anthropic",
+  "deepmind", "palantir", "snowflake", "databricks", "datadog", "twilio",
+  "salesforce", "hubspot", "atlassian", "gitlab", "linkedin", "twitter",
+  "mckinsey", "bain", "bcg", "goldman sachs", "morgan stanley", "jp morgan",
 ];
+
+const TECHNICAL_TITLES = [
+  "engineer", "developer", "architect", "programmer", "scientist",
+  "researcher", "technical", "tech lead", "machine learning", "data",
+  "devops", "sre", "infrastructure", "backend", "frontend", "fullstack",
+  "full-stack", "software", "hardware", "systems", "security",
+];
+
+const TECHNICAL_DEGREES = [
+  "computer science", "computing", "software engineering", "electrical engineering",
+  "mathematics", "physics", "machine learning", "artificial intelligence",
+  "data science", "engineering", "cs", "meng", "beng",
+];
+
+const EXIT_KEYWORDS = [
+  "acquired by", "acquisition", "acquired", "exit", "exited",
+  "ipo", "went public", "sold to", "merged with", "successful exit",
+];
+
+const DOMAIN_KEYWORDS: Record<string, string[]> = {
+  fintech: ["fintech", "payment", "banking", "finance", "trading", "lending", "crypto"],
+  ai: ["artificial intelligence", "machine learning", "deep learning", "nlp", "ai", "neural", "llm"],
+  saas: ["saas", "b2b", "enterprise software", "platform", "subscription", "cloud software"],
+  healthtech: ["health", "medical", "clinical", "biotech", "pharma", "healthcare", "genomics"],
+  ecommerce: ["ecommerce", "e-commerce", "retail", "marketplace", "commerce", "dtc"],
+  cybersecurity: ["security", "cybersecurity", "infosec", "encryption", "threat"],
+  cleantech: ["clean energy", "sustainability", "renewable", "solar", "climate", "carbon"],
+};
 
 interface LinkedInProfile {
   linkedInUrl: string;
@@ -660,60 +693,156 @@ interface LinkedInProfile {
   location?: string;
   isStealthMode?: boolean;
   isRecentlyAnnounced?: boolean;
-  education: Array<{ school: string; isTopTier?: boolean }>;
-  experience: Array<{ company: string; title: string; isHighGrowth?: boolean }>;
+  stealthSignals?: string[];
+  education: Array<{ school: string; degree?: string; fieldOfStudy?: string; startYear?: number; endYear?: number; isTopTier?: boolean }>;
+  experience: Array<{ company: string; title: string; startDate?: string; endDate?: string; isCurrent?: boolean; isHighGrowth?: boolean }>;
+  // Enrichment signals
+  isRepeatFounder?: boolean;
+  isTechnicalFounder?: boolean;
+  previousExits?: number;
+  yearsOfExperience?: number;
+  domainExpertise?: string[];
+  hasPhd?: boolean;
+  hasMba?: boolean;
+  enrichmentConfidence?: "high" | "medium" | "low";
 }
 
 function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfile {
   const textLower = text.toLowerCase();
   const lines = text.split("\n").filter((l) => l.trim());
 
-  const stealthKeywords = ["stealth", "building something new", "unannounced", "0 to 1"];
-  const announcedKeywords = ["just launched", "announcing", "out of stealth"];
+  const stealthKeywords = ["stealth", "building something new", "unannounced", "0 to 1", "pre-launch", "under the radar", "founding team", "zero to one"];
+  const announcedKeywords = ["just launched", "announcing", "out of stealth", "coming out of stealth", "excited to announce"];
 
-  const isStealthMode = stealthKeywords.some((k) => textLower.includes(k));
+  const stealthSignals: string[] = [];
+  let isStealthMode = false;
+  for (const k of stealthKeywords) {
+    if (textLower.includes(k)) {
+      stealthSignals.push(k);
+      isStealthMode = true;
+    }
+  }
   const isRecentlyAnnounced = announcedKeywords.some((k) => textLower.includes(k));
 
   let headline = "";
   let location = "";
 
   for (const line of lines.slice(0, 10)) {
-    if (/CEO|CTO|Founder|Director|Engineer|Building/i.test(line) && !headline) {
+    if (/CEO|CTO|Founder|Co-founder|Director|Engineer|Building/i.test(line) && !headline) {
       headline = line.substring(0, 100);
     }
-    if (/London|UK|Manchester|Cambridge|Oxford/i.test(line) && !location) {
+    if (/London|UK|Manchester|Cambridge|Oxford|Edinburgh|Bristol|Birmingham/i.test(line) && !location) {
       location = line.substring(0, 50);
     }
   }
 
+  // Education with degree and field extraction
   const education: LinkedInProfile["education"] = [];
-  const eduKeywords = ["University", "College", "Institute", "MBA", "PhD"];
+  const eduKeywords = ["University", "College", "Institute", "School", "MBA", "BSc", "MSc", "PhD", "Bachelor", "Master"];
+  let hasPhd = false;
+  let hasMba = false;
 
   for (const line of lines) {
+    const lineLower = line.toLowerCase();
     for (const keyword of eduKeywords) {
       if (line.includes(keyword)) {
-        const isTopTier = TOP_TIER_UNIVERSITIES.some((u) => line.toLowerCase().includes(u));
-        education.push({ school: line.substring(0, 100), isTopTier });
+        const isTopTier = TOP_TIER_UNIVERSITIES.some((u) => lineLower.includes(u));
+
+        let degree: string | undefined;
+        if (lineLower.includes("phd") || lineLower.includes("doctorate") || lineLower.includes("dphil")) {
+          degree = "PhD"; hasPhd = true;
+        } else if (lineLower.includes("mba")) {
+          degree = "MBA"; hasMba = true;
+        } else if (lineLower.includes("master") || lineLower.includes("msc") || lineLower.includes("meng")) {
+          degree = "Masters";
+        } else if (lineLower.includes("bachelor") || lineLower.includes("bsc") || lineLower.includes("beng")) {
+          degree = "Bachelors";
+        }
+
+        let fieldOfStudy: string | undefined;
+        for (const td of TECHNICAL_DEGREES) {
+          if (lineLower.includes(td)) { fieldOfStudy = td.charAt(0).toUpperCase() + td.slice(1); break; }
+        }
+
+        education.push({ school: line.substring(0, 100), degree, fieldOfStudy, isTopTier });
         break;
       }
     }
   }
 
+  // Experience extraction with title detection
   const experience: LinkedInProfile["experience"] = [];
 
   for (const line of lines) {
     const lineLower = line.toLowerCase();
     for (const company of HIGH_GROWTH_COMPANIES) {
       if (lineLower.includes(company)) {
-        experience.push({
-          company: company.charAt(0).toUpperCase() + company.slice(1),
-          title: "Unknown",
-          isHighGrowth: true,
-        });
+        let title = "Unknown";
+        const titlePatterns = ["engineer", "developer", "manager", "director", "vp", "head", "lead", "founder", "ceo", "cto", "cfo", "co-founder", "cofounder", "principal"];
+        for (const pattern of titlePatterns) {
+          if (lineLower.includes(pattern)) {
+            const idx = lineLower.indexOf(pattern);
+            title = line.substring(Math.max(0, idx - 20), idx + pattern.length + 10).trim();
+            break;
+          }
+        }
+        experience.push({ company: company.charAt(0).toUpperCase() + company.slice(1), title, isHighGrowth: true });
+        break;
+      }
+    }
+
+    // General company patterns
+    const companyPatterns = ["at ", "@ "];
+    for (const pattern of companyPatterns) {
+      const idx = lineLower.indexOf(pattern);
+      if (idx !== -1 && idx < 50) {
+        const companyPart = line.substring(idx + pattern.length).trim().split(/[,·\-]/)[0].trim();
+        if (companyPart.length > 2 && companyPart.length < 50) {
+          const isHighGrowth = HIGH_GROWTH_COMPANIES.some(hg => companyPart.toLowerCase().includes(hg));
+          if (!experience.some(e => e.company.toLowerCase() === companyPart.toLowerCase())) {
+            experience.push({ company: companyPart, title: line.substring(0, idx).trim() || "Unknown", isHighGrowth });
+          }
+        }
         break;
       }
     }
   }
+
+  // Repeat founder detection
+  const founderTitles = experience.filter(e => /\b(founder|co-founder|cofounder)\b/i.test(e.title));
+  const isRepeatFounder = founderTitles.length >= 2;
+
+  // Technical founder detection
+  const hasTechnicalDegree = education.some(e => e.fieldOfStudy && TECHNICAL_DEGREES.some(td => e.fieldOfStudy!.toLowerCase().includes(td)));
+  const hasTechnicalRole = experience.some(e => TECHNICAL_TITLES.some(tt => e.title.toLowerCase().includes(tt)));
+  const isTechnicalFounder = hasTechnicalDegree || hasTechnicalRole;
+
+  // Previous exits detection
+  let previousExits = 0;
+  for (const keyword of EXIT_KEYWORDS) { if (textLower.includes(keyword)) previousExits++; }
+  previousExits = Math.min(previousExits, 5);
+  if (founderTitles.length === 0 && previousExits > 0) previousExits = Math.min(previousExits, 1);
+
+  // Years of experience estimation
+  let yearsOfExperience: number | undefined;
+  const currentYear = new Date().getFullYear();
+  const yearMatches = text.match(/\b(19|20)\d{2}\b/g);
+  if (yearMatches) {
+    const years = yearMatches.map(Number).filter(y => y >= 1980 && y <= currentYear);
+    if (years.length >= 2) yearsOfExperience = currentYear - Math.min(...years);
+  }
+
+  // Domain expertise detection
+  const domainExpertise: string[] = [];
+  for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+    if (keywords.filter(kw => textLower.includes(kw)).length >= 2) domainExpertise.push(domain);
+  }
+
+  // Enrichment confidence
+  let enrichmentConfidence: "high" | "medium" | "low" = "low";
+  const dataPoints = [headline ? 1 : 0, location ? 1 : 0, education.length > 0 ? 1 : 0, experience.length > 0 ? 1 : 0, experience.length >= 3 ? 1 : 0, education.some(e => e.degree) ? 1 : 0].reduce((a, b) => a + b, 0);
+  if (dataPoints >= 5) enrichmentConfidence = "high";
+  else if (dataPoints >= 3) enrichmentConfidence = "medium";
 
   return {
     linkedInUrl,
@@ -721,8 +850,17 @@ function parseLinkedInContent(linkedInUrl: string, text: string): LinkedInProfil
     location: location || undefined,
     isStealthMode,
     isRecentlyAnnounced,
+    stealthSignals: stealthSignals.length > 0 ? stealthSignals : undefined,
     education: education.slice(0, 5),
     experience: experience.slice(0, 10),
+    isRepeatFounder,
+    isTechnicalFounder,
+    previousExits,
+    yearsOfExperience,
+    domainExpertise: domainExpertise.length > 0 ? domainExpertise : undefined,
+    hasPhd,
+    hasMba,
+    enrichmentConfidence,
   };
 }
 
@@ -730,6 +868,7 @@ function calculateFounderScore(profile: LinkedInProfile): {
   educationScore: number;
   experienceScore: number;
   overallScore: number;
+  founderTier: "exceptional" | "strong" | "promising" | "standard";
 } {
   let educationScore = 0;
   let experienceScore = 0;
@@ -741,15 +880,44 @@ function calculateFounderScore(profile: LinkedInProfile): {
     educationScore = 30;
   }
 
+  // PhD / MBA bonus
+  if (profile.hasPhd) educationScore = Math.min(100, educationScore + 15);
+  if (profile.hasMba) educationScore = Math.min(100, educationScore + 10);
+
   const highGrowthCount = profile.experience.filter((e) => e.isHighGrowth).length;
   if (highGrowthCount >= 3) experienceScore = 100;
   else if (highGrowthCount === 2) experienceScore = 80;
   else if (highGrowthCount === 1) experienceScore = 60;
   else if (profile.experience.length > 0) experienceScore = 30;
 
+  // Leadership bonus
+  const hasLeadershipRole = profile.experience.some(e =>
+    /\b(founder|ceo|cto|head|director)\b/i.test(e.title)
+  );
+  if (hasLeadershipRole) experienceScore = Math.min(100, experienceScore + 15);
+
+  // Repeat founder bonus
+  if (profile.isRepeatFounder) experienceScore = Math.min(100, experienceScore + 15);
+
+  // Previous exit bonus
+  if (profile.previousExits && profile.previousExits > 0) experienceScore = Math.min(100, experienceScore + 10);
+
+  // Career depth bonus
+  if (profile.yearsOfExperience && profile.yearsOfExperience >= 10) experienceScore = Math.min(100, experienceScore + 5);
+
   const overallScore = Math.round(educationScore * 0.4 + experienceScore * 0.6);
 
-  return { educationScore, experienceScore, overallScore };
+  // Founder tier
+  let founderTier: "exceptional" | "strong" | "promising" | "standard" = "standard";
+  if (overallScore >= 80 || (profile.isRepeatFounder && profile.previousExits && profile.previousExits > 0)) {
+    founderTier = "exceptional";
+  } else if (overallScore >= 65 || (profile.isRepeatFounder && highGrowthCount >= 1)) {
+    founderTier = "strong";
+  } else if (overallScore >= 45 || highGrowthCount >= 1 || topTierCount >= 1) {
+    founderTier = "promising";
+  }
+
+  return { educationScore, experienceScore, overallScore, founderTier };
 }
 
 // ============ SCHEDULED VC DISCOVERY ============
