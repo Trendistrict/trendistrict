@@ -28,6 +28,16 @@ import {
   IconEye,
   IconRocket,
   IconX,
+  IconWorld,
+  IconCode,
+  IconUsers,
+  IconCurrencyDollar,
+  IconNews,
+  IconChevronDown,
+  IconChevronUp,
+  IconTrendingUp,
+  IconTarget,
+  IconExternalLink,
 } from "@tabler/icons-react";
 import {
   Dialog,
@@ -59,6 +69,16 @@ export default function StartupsPage() {
   const [searchResults, setSearchResults] = useState<CompanyResult[]>([]);
   const [showSearchDialog, setShowSearchDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = (id: string) => {
+    setExpandedCards(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const settings = useQuery(api.settings.get);
   const startups = useQuery(api.startups.list, {
@@ -221,12 +241,16 @@ export default function StartupsPage() {
       {/* Startups List */}
       <div className="grid gap-4">
         {startups && startups.length > 0 ? (
-          startups.map((startup) => (
+          startups.map((startup) => {
+            const isExpanded = expandedCards.has(startup._id);
+            const hasEnrichment = !!(startup.website || startup.description || startup.techStack?.length || startup.businessModel || startup.fundingStage || startup.newsArticles?.length || startup.fundingDetails?.length || startup.teamSize);
+
+            return (
             <Card key={startup._id}>
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <h3 className="font-semibold text-lg">{startup.companyName}</h3>
                       <Badge variant="secondary" className="text-xs">
                         {startup.companyNumber}
@@ -243,8 +267,45 @@ export default function StartupsPage() {
                           Recently Announced
                         </Badge>
                       )}
+                      {startup.fundingStage && (
+                        <Badge className="text-xs gap-1 bg-violet-600">
+                          <IconCurrencyDollar className="h-3 w-3" />
+                          {startup.fundingStage}
+                        </Badge>
+                      )}
+                      {startup.businessModel && (
+                        <Badge variant="outline" className="text-xs">
+                          {startup.businessModel}
+                        </Badge>
+                      )}
+                      {startup.teamSize && (
+                        <Badge variant="outline" className="text-xs gap-1">
+                          <IconUsers className="h-3 w-3" />
+                          {startup.teamSize}
+                        </Badge>
+                      )}
                     </div>
+
+                    {/* Description */}
+                    {startup.description && (
+                      <p className="text-sm text-muted-foreground line-clamp-2">
+                        {startup.description}
+                      </p>
+                    )}
+
                     <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                      {startup.website && (
+                        <a
+                          href={startup.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-primary hover:underline"
+                        >
+                          <IconWorld className="h-4 w-4" />
+                          Website
+                          <IconExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                       <span className="flex items-center gap-1">
                         <IconCalendar className="h-4 w-4" />
                         Inc. {startup.incorporationDate}
@@ -260,6 +321,54 @@ export default function StartupsPage() {
                         </span>
                       )}
                     </div>
+
+                    {/* Scores row */}
+                    {(startup.teamScore !== undefined || startup.tractionScore !== undefined) && (
+                      <div className="flex gap-4">
+                        {startup.teamScore !== undefined && (
+                          <div className="flex items-center gap-1.5 text-sm">
+                            <IconUsers className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Team:</span>
+                            <span className={`font-semibold ${startup.teamScore >= 70 ? "text-emerald-500" : startup.teamScore >= 40 ? "text-amber-500" : "text-red-500"}`}>
+                              {startup.teamScore}%
+                            </span>
+                          </div>
+                        )}
+                        {startup.tractionScore !== undefined && (
+                          <div className="flex items-center gap-1.5 text-sm">
+                            <IconTrendingUp className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Traction:</span>
+                            <span className={`font-semibold ${startup.tractionScore >= 70 ? "text-emerald-500" : startup.tractionScore >= 40 ? "text-amber-500" : "text-red-500"}`}>
+                              {startup.tractionScore}%
+                            </span>
+                          </div>
+                        )}
+                        {startup.overallScore !== undefined && (
+                          <div className="flex items-center gap-1.5 text-sm">
+                            <IconTarget className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Overall:</span>
+                            <span className={`font-semibold ${startup.overallScore >= 70 ? "text-emerald-500" : startup.overallScore >= 40 ? "text-amber-500" : "text-red-500"}`}>
+                              {startup.overallScore}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tech stack */}
+                    {startup.techStack && startup.techStack.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <IconCode className="h-4 w-4 text-muted-foreground" />
+                        <div className="flex gap-1 flex-wrap">
+                          {startup.techStack.map((tech) => (
+                            <Badge key={tech} variant="secondary" className="text-xs">
+                              {tech}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {startup.sicCodes && startup.sicCodes.length > 0 && (
                       <div className="flex items-center gap-2">
                         <IconTag className="h-4 w-4 text-muted-foreground" />
@@ -270,6 +379,128 @@ export default function StartupsPage() {
                             </Badge>
                           ))}
                         </div>
+                      </div>
+                    )}
+
+                    {/* Expandable details */}
+                    {hasEnrichment && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground px-0 hover:bg-transparent"
+                        onClick={() => toggleExpanded(startup._id)}
+                      >
+                        {isExpanded ? (
+                          <IconChevronUp className="h-4 w-4 mr-1" />
+                        ) : (
+                          <IconChevronDown className="h-4 w-4 mr-1" />
+                        )}
+                        {isExpanded ? "Less" : "More details"}
+                      </Button>
+                    )}
+
+                    {isExpanded && (
+                      <div className="space-y-3 pt-2 border-t">
+                        {/* Product description */}
+                        {startup.productDescription && (
+                          <div>
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase mb-1">Product</h4>
+                            <p className="text-sm">{startup.productDescription}</p>
+                          </div>
+                        )}
+
+                        {/* Crunchbase data */}
+                        {startup.crunchbaseData && (
+                          <div>
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase mb-1">Crunchbase</h4>
+                            <div className="flex flex-wrap gap-3 text-sm">
+                              {startup.crunchbaseData.totalFunding && (
+                                <span>Total Funding: <strong>{startup.crunchbaseData.totalFunding}</strong></span>
+                              )}
+                              {startup.crunchbaseData.lastRound && (
+                                <span>Last Round: <strong>{startup.crunchbaseData.lastRound}</strong></span>
+                              )}
+                              {startup.crunchbaseData.employeeCount && (
+                                <span>Employees: <strong>{startup.crunchbaseData.employeeCount}</strong></span>
+                              )}
+                            </div>
+                            {startup.crunchbaseData.investors && startup.crunchbaseData.investors.length > 0 && (
+                              <div className="flex gap-1 flex-wrap mt-1">
+                                {startup.crunchbaseData.investors.map((inv: string) => (
+                                  <Badge key={inv} variant="outline" className="text-xs">{inv}</Badge>
+                                ))}
+                              </div>
+                            )}
+                            {startup.crunchbaseUrl && (
+                              <a
+                                href={startup.crunchbaseUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-primary hover:underline flex items-center gap-1 mt-1"
+                              >
+                                View on Crunchbase <IconExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Funding details */}
+                        {startup.fundingDetails && startup.fundingDetails.length > 0 && (
+                          <div>
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase mb-1">Funding Rounds</h4>
+                            <div className="space-y-1">
+                              {startup.fundingDetails.map((round: { round?: string; amount?: string; date?: string; investors?: string[] }, idx: number) => (
+                                <div key={idx} className="text-sm flex gap-3">
+                                  {round.round && <Badge variant="secondary" className="text-xs">{round.round}</Badge>}
+                                  {round.amount && <span className="font-medium">{round.amount}</span>}
+                                  {round.date && <span className="text-muted-foreground">{round.date}</span>}
+                                  {round.investors && round.investors.length > 0 && (
+                                    <span className="text-muted-foreground">by {round.investors.join(", ")}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* News articles */}
+                        {startup.newsArticles && startup.newsArticles.length > 0 && (
+                          <div>
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase mb-1 flex items-center gap-1">
+                              <IconNews className="h-3 w-3" />
+                              News ({startup.newsArticles.length})
+                            </h4>
+                            <div className="space-y-1">
+                              {startup.newsArticles.slice(0, 5).map((article: { title: string; url?: string; source?: string; date?: string }, idx: number) => (
+                                <div key={idx} className="text-sm">
+                                  {article.url ? (
+                                    <a
+                                      href={article.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-primary hover:underline"
+                                    >
+                                      {article.title}
+                                    </a>
+                                  ) : (
+                                    <span>{article.title}</span>
+                                  )}
+                                  {(article.source || article.date) && (
+                                    <span className="text-muted-foreground text-xs ml-2">
+                                      {[article.source, article.date].filter(Boolean).join(" - ")}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {startup.enrichedAt && (
+                          <p className="text-xs text-muted-foreground">
+                            Enriched: {new Date(startup.enrichedAt).toLocaleDateString()}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -315,7 +546,8 @@ export default function StartupsPage() {
                 </div>
               </CardContent>
             </Card>
-          ))
+            );
+          })
         ) : (
           <Card>
             <CardContent className="p-8 text-center">

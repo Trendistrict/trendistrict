@@ -28,6 +28,15 @@ import {
   IconX,
   IconExternalLink,
   IconSparkles,
+  IconBrandGithub,
+  IconBrandTwitter,
+  IconRepeat,
+  IconCode,
+  IconTrophy,
+  IconClock,
+  IconWorld,
+  IconCertificate,
+  IconShield,
 } from "@tabler/icons-react";
 import {
   Dialog,
@@ -151,13 +160,18 @@ export default function FoundersPage() {
       {/* Founders List */}
       <div className="grid gap-4">
         {filteredFounders && filteredFounders.length > 0 ? (
-          filteredFounders.map((founder) => (
+          filteredFounders.map((founder) => {
+            const founderTierColor = founder.founderTier === "exceptional" ? "bg-emerald-600" :
+              founder.founderTier === "strong" ? "bg-blue-600" :
+              founder.founderTier === "promising" ? "bg-amber-600" : "bg-slate-600";
+
+            return (
             <Card key={founder._id}>
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 space-y-3">
                     {/* Name and badges */}
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <h3 className="font-semibold text-lg">
                         {founder.firstName} {founder.lastName}
                       </h3>
@@ -166,9 +180,44 @@ export default function FoundersPage() {
                           Founder
                         </Badge>
                       )}
+                      {founder.founderTier && (
+                        <Badge className={`text-xs ${founderTierColor}`}>
+                          {founder.founderTier}
+                        </Badge>
+                      )}
                       {founder.startup && (
                         <Badge variant="secondary" className="text-xs">
                           {founder.startup.companyName}
+                        </Badge>
+                      )}
+                      {founder.isRepeatFounder && (
+                        <Badge variant="outline" className="text-xs gap-1">
+                          <IconRepeat className="h-3 w-3" />
+                          Repeat Founder
+                        </Badge>
+                      )}
+                      {founder.isTechnicalFounder && (
+                        <Badge variant="outline" className="text-xs gap-1">
+                          <IconCode className="h-3 w-3" />
+                          Technical
+                        </Badge>
+                      )}
+                      {founder.hasPhd && (
+                        <Badge variant="outline" className="text-xs gap-1">
+                          <IconCertificate className="h-3 w-3" />
+                          PhD
+                        </Badge>
+                      )}
+                      {founder.hasMba && (
+                        <Badge variant="outline" className="text-xs gap-1">
+                          <IconCertificate className="h-3 w-3" />
+                          MBA
+                        </Badge>
+                      )}
+                      {(founder.previousExits ?? 0) > 0 && (
+                        <Badge variant="outline" className="text-xs gap-1 border-emerald-500 text-emerald-500">
+                          <IconTrophy className="h-3 w-3" />
+                          {founder.previousExits} Exit{(founder.previousExits ?? 0) > 1 ? "s" : ""}
                         </Badge>
                       )}
                     </div>
@@ -187,10 +236,22 @@ export default function FoundersPage() {
                           {founder.location}
                         </span>
                       )}
+                      {founder.yearsOfExperience !== undefined && (
+                        <span className="flex items-center gap-1">
+                          <IconClock className="h-4 w-4" />
+                          {founder.yearsOfExperience}y exp
+                        </span>
+                      )}
+                      {founder.enrichmentConfidence && (
+                        <span className="flex items-center gap-1">
+                          <IconShield className="h-4 w-4" />
+                          {founder.enrichmentConfidence} confidence
+                        </span>
+                      )}
                     </div>
 
-                    {/* Contact info */}
-                    <div className="flex gap-4">
+                    {/* Contact & social links */}
+                    <div className="flex gap-4 flex-wrap">
                       {founder.email && (
                         <a
                           href={`mailto:${founder.email}`}
@@ -212,7 +273,57 @@ export default function FoundersPage() {
                           <IconExternalLink className="h-3 w-3" />
                         </a>
                       )}
+                      {founder.githubUrl && (
+                        <a
+                          href={founder.githubUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-sm text-primary hover:underline"
+                        >
+                          <IconBrandGithub className="h-4 w-4" />
+                          GitHub
+                          <IconExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      {founder.twitterUrl && (
+                        <a
+                          href={founder.twitterUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-sm text-primary hover:underline"
+                        >
+                          <IconBrandTwitter className="h-4 w-4" />
+                          {founder.twitterHandle ? `@${founder.twitterHandle}` : "Twitter"}
+                          <IconExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      {founder.personalWebsite && (
+                        <a
+                          href={founder.personalWebsite}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-sm text-primary hover:underline"
+                        >
+                          <IconWorld className="h-4 w-4" />
+                          Website
+                          <IconExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </div>
+
+                    {/* Domain expertise */}
+                    {founder.domainExpertise && founder.domainExpertise.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Domains:</span>
+                        <div className="flex gap-1 flex-wrap">
+                          {founder.domainExpertise.map((domain: string) => (
+                            <Badge key={domain} variant="secondary" className="text-xs">
+                              {domain}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Education */}
                     {founder.education && founder.education.length > 0 && (
@@ -258,6 +369,15 @@ export default function FoundersPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* GitHub stats */}
+                    {founder.githubRepos !== undefined && founder.githubRepos > 0 && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <IconBrandGithub className="h-4 w-4" />
+                        {founder.githubRepos} public repos
+                        {founder.githubBio && <span>· {founder.githubBio}</span>}
+                      </div>
+                    )}
                   </div>
 
                   {/* Score and actions */}
@@ -296,11 +416,18 @@ export default function FoundersPage() {
                         <IconX className="h-4 w-4" />
                       </Button>
                     </div>
+
+                    {founder.enrichedAt && (
+                      <span className="text-xs text-muted-foreground">
+                        Enriched {new Date(founder.enrichedAt).toLocaleDateString()}
+                      </span>
+                    )}
                   </div>
                 </div>
               </CardContent>
             </Card>
-          ))
+            );
+          })
         ) : (
           <Card>
             <CardContent className="p-8 text-center">
