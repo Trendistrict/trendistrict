@@ -69,6 +69,7 @@ export default defineSchema({
     teamScore: v.optional(v.number()),
     marketScore: v.optional(v.number()),
     tractionScore: v.optional(v.number()),
+    bonusScore: v.optional(v.number()), // Stealth mode / other bonuses
   })
     .index("by_user", ["userId"])
     .index("by_user_and_stage", ["userId", "stage"])
