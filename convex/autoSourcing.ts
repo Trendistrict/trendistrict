@@ -1966,7 +1966,9 @@ async function mapWebsiteWithFirecrawl(
     }
 
     const data = await response.json();
-    return data.links || [];
+    const links = data.links || [];
+    // Filter to only valid string URLs
+    return links.filter((link: unknown): link is string => typeof link === "string");
   } catch (error) {
     console.error("[Firecrawl] map exception:", error);
     return [];
