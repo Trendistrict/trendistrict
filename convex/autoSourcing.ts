@@ -1976,7 +1976,7 @@ async function mapWebsiteWithFirecrawl(
 }
 
 // Find key pages (about, team, pricing) from a list of URLs
-function findKeyPages(urls: string[]): {
+function findKeyPages(urls: unknown[]): {
   about?: string;
   team?: string;
   pricing?: string;
@@ -1985,6 +1985,7 @@ function findKeyPages(urls: string[]): {
   const result: { about?: string; team?: string; pricing?: string; careers?: string } = {};
 
   for (const url of urls) {
+    if (typeof url !== "string") continue;
     const lower = url.toLowerCase();
     if (!result.about && (lower.includes("/about") || lower.includes("/company"))) {
       result.about = url;
