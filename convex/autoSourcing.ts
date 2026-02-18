@@ -1928,7 +1928,11 @@ async function scrapeWithFirecrawl(
     });
 
     if (!response.ok) {
-      console.error("[Firecrawl] scrape error:", response.status, url);
+      if (response.status === 400) {
+        console.log(`[Firecrawl] skipped (400): ${url}`);
+      } else {
+        console.error("[Firecrawl] scrape error:", response.status, url);
+      }
       return null;
     }
 
@@ -2136,8 +2140,21 @@ async function deepScrapeStartupWebsite(
     if (keyPages.team) pagesToScrape.push(keyPages.team);
     if (keyPages.pricing) pagesToScrape.push(keyPages.pricing);
 
+    // Filter out URLs that typically fail or waste credits
+    const SKIP_PATTERNS = [
+      "/apply", "/login", "/signup", "/register", "/auth",
+      "/contact", "/demo", "/book", "/schedule", "/calendar",
+      "/privacy", "/terms", "/legal", "/cookie",
+      "/blog/", "/news/", "/press/",
+      ".pdf", ".png", ".jpg", ".svg",
+    ];
+    const filteredPages = pagesToScrape.filter(url => {
+      const lower = url.toLowerCase();
+      return !SKIP_PATTERNS.some(pattern => lower.includes(pattern));
+    });
+
     // Deduplicate
-    const uniquePages = [...new Set(pagesToScrape)].slice(0, 4);
+    const uniquePages = [...new Set(filteredPages)].slice(0, 4);
 
     let allMarkdown = "";
     let pagesScraped = 0;
