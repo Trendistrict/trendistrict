@@ -1100,6 +1100,7 @@ export const reEnrichAllFounders = action({
   args: {
     exaApiKey: v.string(),
     crunchbaseApiKey: v.optional(v.string()),
+    firecrawlApiKey: v.optional(v.string()),
     limit: v.optional(v.number()),
     forceAll: v.optional(v.boolean()),
   },
@@ -1112,6 +1113,8 @@ export const reEnrichAllFounders = action({
       githubFound: number;
       twitterFound: number;
       companiesEnriched: number;
+      pagesScraped: number;
+      teamMembersFound: number;
       errors: string[];
       fatalError?: string;
     } = {
@@ -1120,6 +1123,8 @@ export const reEnrichAllFounders = action({
       githubFound: 0,
       twitterFound: 0,
       companiesEnriched: 0,
+      pagesScraped: 0,
+      teamMembersFound: 0,
       errors: [],
     };
 
@@ -1253,6 +1258,37 @@ export const reEnrichAllFounders = action({
                 }
               } catch (error) {
                 console.error(`[reEnrichAllFounders] Crunchbase error:`, error);
+              }
+            }
+
+            // Firecrawl deep website scrape (if API key provided and we have a website)
+            let firecrawlData: Awaited<ReturnType<typeof deepScrapeStartupWebsite>> = null;
+            if (args.firecrawlApiKey && companyInfo?.website) {
+              try {
+                await delay(300);
+                console.log(`[reEnrichAllFounders] Firecrawl scrape: ${companyInfo.website}`);
+                firecrawlData = await deepScrapeStartupWebsite(args.firecrawlApiKey, companyInfo.website);
+                if (firecrawlData) {
+                  results.pagesScraped += firecrawlData.pagesScraped;
+                  results.teamMembersFound += firecrawlData.teamMembers.length;
+                  console.log(`[reEnrichAllFounders] Firecrawl: ${firecrawlData.pagesScraped} pages, ${firecrawlData.teamMembers.length} team members`);
+
+                  // Merge Firecrawl data into companyInfo (Firecrawl takes priority for website content)
+                  if (firecrawlData.description && !companyInfo.description) {
+                    companyInfo.description = firecrawlData.description;
+                  }
+                  if (firecrawlData.techStack) {
+                    companyInfo.techStack = [...new Set([...(companyInfo.techStack || []), ...firecrawlData.techStack])];
+                  }
+                  if (firecrawlData.businessModel && !companyInfo.businessModel) {
+                    companyInfo.businessModel = firecrawlData.businessModel;
+                  }
+                  if (firecrawlData.teamSize && !companyInfo.teamSize) {
+                    companyInfo.teamSize = firecrawlData.teamSize;
+                  }
+                }
+              } catch (error) {
+                console.error(`[reEnrichAllFounders] Firecrawl error:`, error);
               }
             }
 
@@ -1854,6 +1890,292 @@ export async function enrichFromCrunchbase(
     return result;
   } catch (error) {
     console.error("Crunchbase enrichment error:", error);
+    return null;
+  }
+}
+
+// ============ FIRECRAWL DEEP SCRAPING ============
+
+const FIRECRAWL_API = "https://api.firecrawl.dev/v2";
+
+interface FirecrawlScrapeResult {
+  markdown: string;
+  metadata: {
+    title?: string;
+    description?: string;
+    sourceURL?: string;
+  };
+}
+
+// Scrape a single URL and return clean markdown content
+async function scrapeWithFirecrawl(
+  apiKey: string,
+  url: string
+): Promise<FirecrawlScrapeResult | null> {
+  try {
+    const response = await fetch(`${FIRECRAWL_API}/scrape`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url,
+        formats: ["markdown"],
+        only_main_content: true,
+        timeout: 30000,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("[Firecrawl] scrape error:", response.status, url);
+      return null;
+    }
+
+    const data = await response.json();
+    if (!data.success) return null;
+
+    return {
+      markdown: data.data?.markdown || "",
+      metadata: data.data?.metadata || {},
+    };
+  } catch (error) {
+    console.error("[Firecrawl] scrape exception:", error);
+    return null;
+  }
+}
+
+// Map a website to discover all pages (about, team, pricing, etc.)
+async function mapWebsiteWithFirecrawl(
+  apiKey: string,
+  url: string
+): Promise<string[]> {
+  try {
+    const response = await fetch(`${FIRECRAWL_API}/map`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url }),
+    });
+
+    if (!response.ok) {
+      console.error("[Firecrawl] map error:", response.status, url);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.links || [];
+  } catch (error) {
+    console.error("[Firecrawl] map exception:", error);
+    return [];
+  }
+}
+
+// Find key pages (about, team, pricing) from a list of URLs
+function findKeyPages(urls: string[]): {
+  about?: string;
+  team?: string;
+  pricing?: string;
+  careers?: string;
+} {
+  const result: { about?: string; team?: string; pricing?: string; careers?: string } = {};
+
+  for (const url of urls) {
+    const lower = url.toLowerCase();
+    if (!result.about && (lower.includes("/about") || lower.includes("/company"))) {
+      result.about = url;
+    }
+    if (!result.team && (lower.includes("/team") || lower.includes("/people") || lower.includes("/founders"))) {
+      result.team = url;
+    }
+    if (!result.pricing && (lower.includes("/pricing") || lower.includes("/plans"))) {
+      result.pricing = url;
+    }
+    if (!result.careers && (lower.includes("/careers") || lower.includes("/jobs"))) {
+      result.careers = url;
+    }
+  }
+
+  return result;
+}
+
+// Extract structured data from scraped markdown content
+function extractDataFromMarkdown(markdown: string): {
+  description?: string;
+  productDescription?: string;
+  techStack: string[];
+  businessModel?: string;
+  teamSize?: string;
+  teamMembers: Array<{ name: string; role?: string; linkedInUrl?: string }>;
+} {
+  const textLower = markdown.toLowerCase();
+
+  // Tech stack detection
+  const detectedTech: string[] = [];
+  for (const [keyword, label] of Object.entries(TECH_STACK_KEYWORDS)) {
+    if (textLower.includes(keyword) && !detectedTech.includes(label)) {
+      detectedTech.push(label);
+    }
+  }
+
+  // Business model detection
+  let businessModel: string | undefined;
+  if (textLower.includes("b2b") || textLower.includes("enterprise")) {
+    businessModel = "B2B";
+  } else if (textLower.includes("b2c") || textLower.includes("consumer")) {
+    businessModel = "B2C";
+  } else if (textLower.includes("marketplace")) {
+    businessModel = "Marketplace";
+  } else if (textLower.includes("d2c") || textLower.includes("dtc") || textLower.includes("direct to consumer")) {
+    businessModel = "DTC";
+  }
+
+  // Team size detection
+  let teamSize: string | undefined;
+  const sizeMatch = markdown.match(/(\d+)\s*(?:employees?|team\s*members?|people|staff)/i);
+  if (sizeMatch) {
+    const count = parseInt(sizeMatch[1]);
+    if (count >= 1 && count <= 10000) {
+      teamSize = count <= 10 ? "1-10" :
+        count <= 50 ? "11-50" :
+        count <= 200 ? "51-200" :
+        count <= 500 ? "201-500" : "500+";
+    }
+  }
+
+  // Description - first substantial paragraph
+  let description: string | undefined;
+  const paragraphs = markdown.split("\n").filter(p => p.trim().length > 60);
+  if (paragraphs.length > 0) {
+    description = paragraphs[0].trim().substring(0, 500);
+  }
+
+  // Team member extraction from markdown
+  const teamMembers: Array<{ name: string; role?: string; linkedInUrl?: string }> = [];
+  const lines = markdown.split("\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // Pattern: "## Name" or "### Name" followed by role on next line
+    const headingMatch = line.match(/^#{2,4}\s+([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/);
+    if (headingMatch) {
+      const name = headingMatch[1];
+      let role: string | undefined;
+      let linkedInUrl: string | undefined;
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const nextLine = lines[j].trim();
+        if (!role && (nextLine.includes("CEO") || nextLine.includes("CTO") ||
+            nextLine.includes("Founder") || nextLine.includes("Director") ||
+            nextLine.includes("Head") || nextLine.includes("VP") ||
+            nextLine.includes("Chief") || nextLine.includes("Partner"))) {
+          role = nextLine.substring(0, 100);
+        }
+        const linkedInMatch = nextLine.match(/linkedin\.com\/in\/[^\s)]+/);
+        if (linkedInMatch) {
+          linkedInUrl = `https://www.${linkedInMatch[0]}`;
+        }
+      }
+      if (name.length > 3 && name.length < 60) {
+        teamMembers.push({ name, role, linkedInUrl });
+      }
+    }
+
+    // Pattern: **Name** - Role or **Name**, Role
+    const boldMatch = line.match(/\*\*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\*\*\s*[-–,]\s*(.+)/);
+    if (boldMatch) {
+      const name = boldMatch[1];
+      const role = boldMatch[2].substring(0, 100);
+      if (name.length > 3 && name.length < 60 && !teamMembers.some(m => m.name === name)) {
+        teamMembers.push({ name, role });
+      }
+    }
+  }
+
+  return {
+    description,
+    techStack: detectedTech,
+    businessModel,
+    teamSize,
+    teamMembers: teamMembers.slice(0, 20),
+  };
+}
+
+// Deep scrape a startup website using Firecrawl
+async function deepScrapeStartupWebsite(
+  apiKey: string,
+  websiteUrl: string
+): Promise<{
+  description?: string;
+  productDescription?: string;
+  techStack?: string[];
+  businessModel?: string;
+  teamSize?: string;
+  teamMembers: Array<{ name: string; role?: string; linkedInUrl?: string }>;
+  pagesScraped: number;
+} | null> {
+  try {
+    console.log(`[Firecrawl] Mapping website: ${websiteUrl}`);
+
+    // Step 1: Map the website to find all pages
+    const allUrls = await mapWebsiteWithFirecrawl(apiKey, websiteUrl);
+    console.log(`[Firecrawl] Found ${allUrls.length} pages`);
+
+    // Step 2: Find key pages
+    const keyPages = findKeyPages(allUrls);
+    console.log(`[Firecrawl] Key pages:`, JSON.stringify(keyPages));
+
+    // Step 3: Scrape homepage + key pages (max 4 pages = 4 credits)
+    const pagesToScrape = [websiteUrl];
+    if (keyPages.about) pagesToScrape.push(keyPages.about);
+    if (keyPages.team) pagesToScrape.push(keyPages.team);
+    if (keyPages.pricing) pagesToScrape.push(keyPages.pricing);
+
+    // Deduplicate
+    const uniquePages = [...new Set(pagesToScrape)].slice(0, 4);
+
+    let allMarkdown = "";
+    let pagesScraped = 0;
+    const allTeamMembers: Array<{ name: string; role?: string; linkedInUrl?: string }> = [];
+
+    for (const pageUrl of uniquePages) {
+      await delay(300);
+      const result = await scrapeWithFirecrawl(apiKey, pageUrl);
+      if (result) {
+        allMarkdown += `\n\n--- ${pageUrl} ---\n\n${result.markdown}`;
+        pagesScraped++;
+
+        const pageData = extractDataFromMarkdown(result.markdown);
+        allTeamMembers.push(...pageData.teamMembers);
+      }
+    }
+
+    if (pagesScraped === 0) return null;
+
+    // Step 4: Extract structured data from all content
+    const extracted = extractDataFromMarkdown(allMarkdown);
+
+    // Deduplicate team members by name
+    const seenNames = new Set<string>();
+    const uniqueTeamMembers = [...allTeamMembers, ...extracted.teamMembers].filter(m => {
+      const key = m.name.toLowerCase();
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
+
+    return {
+      description: extracted.description,
+      techStack: extracted.techStack.length > 0 ? extracted.techStack : undefined,
+      businessModel: extracted.businessModel,
+      teamSize: extracted.teamSize,
+      teamMembers: uniqueTeamMembers.slice(0, 20),
+      pagesScraped,
+    };
+  } catch (error) {
+    console.error("[Firecrawl] deep scrape error:", error);
     return null;
   }
 }

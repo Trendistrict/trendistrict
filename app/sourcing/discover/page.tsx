@@ -102,6 +102,8 @@ export default function DiscoverPage() {
     githubFound: number;
     twitterFound: number;
     companiesEnriched: number;
+    pagesScraped: number;
+    teamMembersFound: number;
     errors: string[];
     fatalError?: string;
   } | null>(null);
@@ -194,6 +196,7 @@ export default function DiscoverPage() {
       const result = await reEnrichAllFounders({
         exaApiKey: settings.exaApiKey,
         crunchbaseApiKey: settings.crunchbaseApiKey,
+        firecrawlApiKey: settings.firecrawlApiKey,
         limit: 5,
         forceAll: true,
       });
@@ -556,6 +559,18 @@ export default function DiscoverPage() {
                 <p className="text-2xl font-bold">{reEnrichResults.companiesEnriched}</p>
                 <p className="text-sm text-muted-foreground">Companies Enriched</p>
               </div>
+              {(reEnrichResults.pagesScraped > 0 || reEnrichResults.teamMembersFound > 0) && (
+                <>
+                  <div className="text-center p-4 bg-background rounded-lg">
+                    <p className="text-2xl font-bold text-orange-500">{reEnrichResults.pagesScraped}</p>
+                    <p className="text-sm text-muted-foreground">Pages Scraped</p>
+                  </div>
+                  <div className="text-center p-4 bg-background rounded-lg">
+                    <p className="text-2xl font-bold text-emerald-500">{reEnrichResults.teamMembersFound}</p>
+                    <p className="text-sm text-muted-foreground">Team Members Found</p>
+                  </div>
+                </>
+              )}
             </div>
             {reEnrichResults.fatalError && (
               <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">

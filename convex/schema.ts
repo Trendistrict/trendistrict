@@ -357,6 +357,9 @@ export default defineSchema({
     zeroBouncApiKey: v.optional(v.string()),
     crunchbaseApiKey: v.optional(v.string()),
 
+    // Firecrawl API key for deep website scraping
+    firecrawlApiKey: v.optional(v.string()),
+
     // Preferences
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),

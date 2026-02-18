@@ -62,6 +62,7 @@ export default function SettingsPage() {
     rocketReachApiKey: "",
     zeroBouncApiKey: "",
     crunchbaseApiKey: "",
+    firecrawlApiKey: "",
   });
 
   const [newCompany, setNewCompany] = useState({ name: "", category: "" });
@@ -92,6 +93,7 @@ export default function SettingsPage() {
         rocketReachApiKey: settings.rocketReachApiKey ?? "",
         zeroBouncApiKey: settings.zeroBouncApiKey ?? "",
         crunchbaseApiKey: settings.crunchbaseApiKey ?? "",
+        firecrawlApiKey: settings.firecrawlApiKey ?? "",
       });
     }
   }, [settings]);
@@ -113,6 +115,7 @@ export default function SettingsPage() {
         rocketReachApiKey: formData.rocketReachApiKey || undefined,
         zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
         crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+        firecrawlApiKey: formData.firecrawlApiKey || undefined,
       });
     } catch (error) {
       console.error("Settings save failed:", error);
@@ -161,6 +164,7 @@ export default function SettingsPage() {
         rocketReachApiKey: formData.rocketReachApiKey || undefined,
         zeroBouncApiKey: formData.zeroBouncApiKey || undefined,
         crunchbaseApiKey: formData.crunchbaseApiKey || undefined,
+        firecrawlApiKey: formData.firecrawlApiKey || undefined,
       });
 
       // Small delay to let the mutation propagate
@@ -275,6 +279,51 @@ export default function SettingsPage() {
                 </p>
               </div>
               {formData.exaApiKey && (
+                <Badge variant="secondary" className="gap-1">
+                  <IconCheck className="h-3 w-3" />
+                  Configured
+                </Badge>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IconSearch className="h-5 w-5" />
+                Firecrawl API (Deep Web Scraping)
+              </CardTitle>
+              <CardDescription>
+                Used to deep-scrape startup websites for product info, team pages, and tech stack
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="firecrawlApiKey">API Key</Label>
+                <Input
+                  id="firecrawlApiKey"
+                  type="password"
+                  value={formData.firecrawlApiKey}
+                  onChange={(e) =>
+                    setFormData({ ...formData, firecrawlApiKey: e.target.value })
+                  }
+                  placeholder="Enter your Firecrawl API key (fc-...)"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Get your API key from{" "}
+                  <a
+                    href="https://www.firecrawl.dev"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Firecrawl Dashboard
+                    <IconExternalLink className="h-3 w-3 inline ml-1" />
+                  </a>
+                  {" "} - 500 free scrapes/month
+                </p>
+              </div>
+              {formData.firecrawlApiKey && (
                 <Badge variant="secondary" className="gap-1">
                   <IconCheck className="h-3 w-3" />
                   Configured

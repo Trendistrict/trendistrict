@@ -33,6 +33,7 @@ export const upsert = mutation({
     rocketReachApiKey: v.optional(v.string()),
     zeroBouncApiKey: v.optional(v.string()),
     crunchbaseApiKey: v.optional(v.string()),
+    firecrawlApiKey: v.optional(v.string()),
     defaultOutreachTemplate: v.optional(v.id("templates")),
     autoScoreFounders: v.optional(v.boolean()),
   },
